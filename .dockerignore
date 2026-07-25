@@ -1,0 +1,10 @@
+.git
+.github
+.pytest_cache
+Audio-Transcription-Chrome
+Audio-Transcription-Firefox
+Audio-Transcription-iOS
+docs
+whisper-finetuning
+*.pyc
+__pycache__

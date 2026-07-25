@@ -3,12 +3,12 @@ import json
 import logging
 import threading
 import time
-import torch
 import ctranslate2
 from huggingface_hub import snapshot_download
 
 from whisper_live.transcriber.transcriber_faster_whisper import WhisperModel
 from whisper_live.backend.base import ServeClientBase
+from whisper_live.runtime import resolve_runtime
 
 
 class ServeClientFasterWhisper(ServeClientBase):
@@ -85,12 +85,7 @@ class ServeClientFasterWhisper(ServeClientBase):
         self.vad_parameters = vad_parameters or {"threshold": 0.5}
         self.hotwords = hotwords
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        if device == "cuda":
-            major, _ = torch.cuda.get_device_capability(device)
-            self.compute_type = "float16" if major >= 7 else "float32"
-        else:
-            self.compute_type = "int8"
+        device, self.compute_type = resolve_runtime(device)
 
         if self.model_size_or_path is None:
             return
@@ -151,23 +146,11 @@ class ServeClientFasterWhisper(ServeClientBase):
                 if ctranslate2.contains_model(local_snapshot):
                     model_to_load = local_snapshot
                 else:
-                    cache_root = os.path.expanduser(os.path.join(self.cache_path, "whisper-ct2-models/"))
-                    os.makedirs(cache_root, exist_ok=True)
-                    safe_name = model_ref.replace("/", "--")
-                    ct2_dir = os.path.join(cache_root, safe_name)
-
-                    if not ctranslate2.contains_model(ct2_dir):
-                        logging.info(f"Converting '{model_ref}' to CTranslate2 @ {ct2_dir}")
-                        ct2_converter = ctranslate2.converters.TransformersConverter(
-                            local_snapshot, 
-                            copy_files=["tokenizer.json", "preprocessor_config.json"]
-                        )
-                        ct2_converter.convert(
-                            output_dir=ct2_dir,
-                            quantization=self.compute_type,
-                            force=False,  # skip if already up-to-date
-                        )
-                    model_to_load = ct2_dir
+                    raise ValueError(
+                        f"'{model_ref}' is not a CTranslate2 model. "
+                        "The Pascal image intentionally omits Transformers; "
+                        "convert the model before serving it."
+                    )
 
         logging.info(f"Loading model: {model_to_load}")
         self.transcriber = WhisperModel(

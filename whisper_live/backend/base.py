@@ -347,11 +347,16 @@ class ServeClientBase(object):
         Returns:
             str or None: Speaker label, or None if diarization is disabled or audio unavailable.
         """
+        return self._identify_speaker_times(
+            self.get_segment_start(segment),
+            self.get_segment_end(segment),
+        )
+
+    def _identify_speaker_times(self, seg_start, seg_end):
+        """Run diarization for times relative to the current audio chunk."""
         if self.diarization is None or self.frames_np is None:
             return None
         try:
-            seg_start = self.get_segment_start(segment)
-            seg_end = self.get_segment_end(segment)
             start_sample = int(seg_start * self.RATE)
             end_sample = int(seg_end * self.RATE)
             samples_offset = max(0, int((self.timestamp_offset - self.frames_offset) * self.RATE))
@@ -453,11 +458,14 @@ class ServeClientBase(object):
             if not self.text or self.text[-1].strip().lower() != self.current_out.strip().lower():
                 self.text.append(self.current_out)
                 with self.lock:
+                    segment_end = min(duration, self.end_time_for_same_output)
+                    speaker = self._identify_speaker_times(0, segment_end)
                     completed_segment = self.format_segment(
                         self.timestamp_offset,
-                        self.timestamp_offset + min(duration, self.end_time_for_same_output),
+                        self.timestamp_offset + segment_end,
                         self.current_out,
-                        completed=True
+                        completed=True,
+                        speaker=speaker,
                     )
                     self.transcript.append(completed_segment)
 

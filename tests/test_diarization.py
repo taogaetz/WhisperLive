@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 import numpy as np
 
 
@@ -73,6 +73,19 @@ class TestSpeakerDiarizer(unittest.TestCase):
         speaker = d.identify_speaker(audio)
         self.assertIsNone(speaker)
 
+    def test_short_turn_uses_closest_existing_speaker(self):
+        d = self._make_diarizer(similarity_threshold=0.8)
+        full_turn = np.zeros(16000, dtype=np.float32)
+        short_turn = np.zeros(8000, dtype=np.float32)
+        self._set_embedding(d, [1.0, 0.0, 0.0])
+        d.identify_speaker(full_turn)
+
+        self._set_embedding(d, [0.0, 1.0, 0.0])
+        speaker = d.identify_speaker(short_turn)
+
+        self.assertEqual(speaker, "SPEAKER_00")
+        self.assertEqual(len(d.speakers), 1)
+
     def test_reset_clears_state(self):
         d = self._make_diarizer()
         self._set_embedding(d, [1.0, 0.0, 0.0])
@@ -100,13 +113,12 @@ class TestSpeakerDiarizer(unittest.TestCase):
         speaker = d.identify_speaker(audio)
         self.assertEqual(speaker, "Alice")
 
-    def test_import_error_without_pyannote(self):
+    def test_missing_onnx_model_has_clear_error(self):
         from whisper_live.diarization import SpeakerDiarizer
 
-        d = SpeakerDiarizer()
-        with patch.dict("sys.modules", {"pyannote": None, "pyannote.audio": None}):
-            with self.assertRaises(ImportError):
-                d._load_model()
+        d = SpeakerDiarizer(embedding_model="/does/not/exist/model.onnx")
+        with self.assertRaisesRegex(FileNotFoundError, "Speaker embedding model"):
+            d._load_model()
 
 
 class TestDiarizationInBase(unittest.TestCase):
@@ -166,6 +178,25 @@ class TestDiarizationInBase(unittest.TestCase):
         seg.end = 1.5
         result = client._identify_speaker(seg)
         self.assertEqual(result, "SPEAKER_01")
+        mock_diarizer.identify_speaker.assert_called_once()
+
+    def test_repeated_output_completion_gets_speaker(self):
+        mock_diarizer = MagicMock()
+        mock_diarizer.identify_speaker.return_value = "SPEAKER_00"
+        client = self._make_client(diarization=mock_diarizer)
+        client.same_output_threshold = 0
+        client.prev_out = "hello"
+        client.frames_np = np.zeros(16000, dtype=np.float32)
+
+        segment = MagicMock()
+        segment.start = 0.0
+        segment.end = 1.0
+        segment.text = "hello"
+        segment.no_speech_prob = 0.0
+
+        client.update_segments([segment], duration=1.0)
+
+        self.assertEqual(client.transcript[0]["speaker"], "SPEAKER_00")
         mock_diarizer.identify_speaker.assert_called_once()
 
 

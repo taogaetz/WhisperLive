@@ -15,7 +15,6 @@ from fastapi.responses import JSONResponse
 from starlette.responses import PlainTextResponse, StreamingResponse
 import uvicorn
 from faster_whisper import WhisperModel
-import torch
 
 from enum import Enum
 
@@ -23,8 +22,8 @@ import numpy as np
 from whisper_live import metrics as wl_metrics
 from websockets.sync.server import serve
 from websockets.exceptions import ConnectionClosed
-from whisper_live.vad import VoiceActivityDetector
 from whisper_live.backend.base import ServeClientBase
+from whisper_live.runtime import resolve_runtime
 
 logging.basicConfig(level=logging.INFO)
 
@@ -340,12 +339,12 @@ class TranscriptionServer:
         try:
             from whisper_live.diarization import SpeakerDiarizer
             return SpeakerDiarizer(
-                similarity_threshold=options.get("diarization_threshold", 0.55),
+                similarity_threshold=options.get("diarization_threshold", 0.45),
                 max_speakers=options.get("max_speakers", 10),
                 hf_token=options.get("hf_token"),
             )
-        except ImportError:
-            logging.warning("pyannote.audio not installed; diarization disabled")
+        except (ImportError, FileNotFoundError) as exc:
+            logging.warning("Speaker diarization disabled: %s", exc)
             return None
 
     def get_audio_from_websocket(self, websocket):
@@ -388,6 +387,7 @@ class TranscriptionServer:
             self.audio_formats[websocket] = audio_format
 
             if self.backend.is_tensorrt():
+                from whisper_live.vad import VoiceActivityDetector
                 self.vad_detector = VoiceActivityDetector(frame_rate=self.RATE)
             self.initialize_client(websocket, options, faster_whisper_custom_model_path,
                                    whisper_tensorrt_path, trt_multilingual, trt_py_session=trt_py_session)
@@ -486,8 +486,7 @@ class TranscriptionServer:
                     shutil.copyfileobj(file.file, tmp)
                     tmp_path = tmp.name
 
-                device = "cuda" if torch.cuda.is_available() else "cpu"
-                compute_type = "float16" if device == "cuda" else "int8"
+                device, compute_type = resolve_runtime()
                 model_name = faster_whisper_custom_model_path or "small"
                 transcriber = WhisperModel(model_name, device=device, compute_type=compute_type)
                 segments, info = transcriber.transcribe(
@@ -764,8 +763,7 @@ class TranscriptionServer:
                         shutil.copyfileobj(file.file, tmp)
                         tmp_path = tmp.name
 
-                    device = "cuda" if torch.cuda.is_available() else "cpu"
-                    compute_type = "float16" if device == "cuda" else "int8"
+                    device, compute_type = resolve_runtime()
 
                     transcriber = WhisperModel(model_name, device=device, compute_type=compute_type)
                     segments, info = transcriber.transcribe(

@@ -13,6 +13,10 @@ This project is a real-time transcription application that uses the OpenAI Whisp
 to convert speech input into text output. It can be used to transcribe both live audio
 input from microphone and pre-recorded audio files.
 
+> **GTX 1080 Ti / Pascal:** this branch includes a lean single-image GPU
+> deployment with online speaker labels and a Nix development shell. See the
+> [Pascal image guide](docs/pascal-1080ti.md).
+
 - [Installation](#installation)
 - [Getting Started](#getting-started)
 - [Running the Server](#running-the-server)
