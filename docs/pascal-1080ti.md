@@ -107,9 +107,10 @@ NVIDIA driver and container toolkit/CDI configured.
 
   services.whisperlivePascal = {
     enable = true;
-    image = "ghcr.io/taogaetz/whisperlive:1080ti"; # replace with @sha256:...
+    image = "ghcr.io/taogaetz/whisperlive@sha256:5d039b2a6ef2dd976b1ac112549263c45656ff22832a1375cfab8ed58977f9ca";
   };
 }
 ```
 
-Pin the published image digest before treating the service as production.
+The module default uses this same immutable digest. The `:1080ti` tag remains
+available for manual testing.

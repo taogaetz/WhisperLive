@@ -13,8 +13,8 @@ in
 
     image = lib.mkOption {
       type = lib.types.str;
-      default = "ghcr.io/taogaetz/whisperlive:1080ti";
-      description = "OCI image reference; pin a sha256 digest in production.";
+      default = "ghcr.io/taogaetz/whisperlive@sha256:5d039b2a6ef2dd976b1ac112549263c45656ff22832a1375cfab8ed58977f9ca";
+      description = "OCI image reference pinned to a published Pascal image.";
     };
 
     listenAddress = lib.mkOption {
