@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#11120f">
+    <title>WhisperLive · Pascal console</title>
+    <link rel="stylesheet" href="/ui/styles.css">
+  </head>
+  <body>
+    <div class="shell">
+      <header class="masthead">
+        <a class="wordmark" href="/" aria-label="WhisperLive home">
+          <span class="mark" aria-hidden="true">
+            <i></i><i></i><i></i><i></i><i></i>
+          </span>
+          <span>WHISPERLIVE</span>
+          <small>PASCAL CONSOLE</small>
+        </a>
+        <div class="server-pill" id="serverPill">
+          <span class="status-dot"></span>
+          <span id="serverSummary">Checking server</span>
+        </div>
+      </header>
+
+      <main>
+        <section class="intro">
+          <div>
+            <p class="eyebrow">LOCAL STREAMING TRANSCRIPTION</p>
+            <h1>Your microphone,<br><em>as it happens.</em></h1>
+          </div>
+          <p class="lede">
+            Live, revisable partials become speaker-labelled transcript lines.
+            Nothing leaves this WhisperLive server.
+          </p>
+        </section>
+
+        <section class="console">
+          <aside class="controls" aria-label="Recording controls">
+            <div class="control-top">
+              <p class="section-label">01 / INPUT</p>
+              <div class="mic-orbit" id="micOrbit" aria-hidden="true">
+                <div class="mic-core">
+                  <span class="mic-glyph"></span>
+                </div>
+                <span class="orbit-ring"></span>
+              </div>
+              <button class="record-button" id="recordButton" type="button" disabled>
+                <span class="button-icon"></span>
+                <span id="recordLabel">Start microphone</span>
+              </button>
+              <p class="hint" id="permissionHint">
+                Your browser will ask for microphone permission.
+              </p>
+            </div>
+
+            <div class="meter-block">
+              <div class="meter-heading">
+                <span>INPUT LEVEL</span>
+                <span id="levelValue">— dB</span>
+              </div>
+              <div class="meter-track">
+                <span id="levelMeter"></span>
+              </div>
+            </div>
+
+            <div class="options">
+              <label class="switch-row">
+                <span>
+                  <strong>Speaker labels</strong>
+                  <small>Online diarization</small>
+                </span>
+                <input id="diarizationToggle" type="checkbox" checked>
+                <span class="switch" aria-hidden="true"></span>
+              </label>
+              <div class="model-row">
+                <span>
+                  <strong>Language</strong>
+                  <small>Optimized model</small>
+                </span>
+                <span class="value">ENGLISH</span>
+              </div>
+            </div>
+
+            <div class="runtime-card">
+              <p class="section-label">RUNTIME</p>
+              <dl>
+                <div><dt>MODEL</dt><dd id="modelValue">—</dd></div>
+                <div><dt>DEVICE</dt><dd id="deviceValue">—</dd></div>
+                <div><dt>COMPUTE</dt><dd id="computeValue">—</dd></div>
+              </dl>
+            </div>
+          </aside>
+
+          <section class="transcript-panel" aria-label="Live transcript">
+            <div class="panel-head">
+              <div>
+                <p class="section-label">02 / TRANSCRIPT</p>
+                <h2>Live session</h2>
+              </div>
+              <div class="panel-actions">
+                <button class="quiet-button" id="copyButton" type="button">Copy</button>
+                <button class="quiet-button" id="clearButton" type="button">Clear</button>
+              </div>
+            </div>
+
+            <div class="telemetry" aria-label="Session telemetry">
+              <div>
+                <span>STREAM</span>
+                <strong id="streamState">IDLE</strong>
+              </div>
+              <div>
+                <span>ELAPSED</span>
+                <strong id="elapsedValue">00:00</strong>
+              </div>
+              <div>
+                <span>EST. LAG</span>
+                <strong id="latencyValue">—</strong>
+              </div>
+              <div>
+                <span>EVENTS</span>
+                <strong id="eventValue">0</strong>
+              </div>
+            </div>
+
+            <div class="error-banner" id="errorBanner" role="alert" hidden></div>
+
+            <div class="transcript-scroll" id="transcriptScroll">
+              <div class="empty-state" id="emptyState">
+                <span class="empty-index">00:00.000</span>
+                <p>Ready when you are.</p>
+                <small>Start the microphone and speak naturally. Completed phrases settle here.</small>
+              </div>
+              <ol class="segments" id="segmentsList" aria-live="polite"></ol>
+            </div>
+
+            <div class="partial-card" id="partialCard">
+              <div class="partial-head">
+                <span><i></i> LIVE PARTIAL</span>
+                <small>May revise as you speak</small>
+              </div>
+              <p id="partialText">Waiting for speech…</p>
+            </div>
+
+            <details class="events">
+              <summary>
+                <span>Raw event stream</span>
+                <span class="summary-meta">JSON · last 80</span>
+              </summary>
+              <pre id="eventLog">No events yet.</pre>
+            </details>
+          </section>
+        </section>
+      </main>
+
+      <footer>
+        <span>WHISPERLIVE / GTX 1080 TI</span>
+        <span>16 KHZ · FLOAT32 PCM · LOCAL</span>
+      </footer>
+    </div>
+
+    <script type="module" src="/ui/app.js"></script>
+  </body>
+</html>

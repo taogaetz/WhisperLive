@@ -8,10 +8,12 @@ import functools
 import logging
 import shutil
 import tempfile
+from pathlib import Path
 from typing import Optional, List
 from fastapi import FastAPI, UploadFile, Form, Request, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.responses import PlainTextResponse, StreamingResponse
 import uvicorn
 from faster_whisper import WhisperModel
@@ -168,6 +170,7 @@ class BackendType(Enum):
 
 class TranscriptionServer:
     RATE = 16000
+    WEB_ROOT = Path(__file__).with_name("web")
 
     def __init__(self):
         self.client_manager = None
@@ -178,6 +181,45 @@ class TranscriptionServer:
         self.raw_pcm_input = False
         self.audio_formats = {}
         self.segment_post_processor = None
+
+    def register_web_dashboard(
+        self,
+        app: FastAPI,
+        backend: str,
+        websocket_port: int,
+        model_path: Optional[str],
+    ) -> None:
+        """Serve the dependency-free browser client alongside the REST API."""
+        app.mount(
+            "/ui",
+            StaticFiles(directory=str(self.WEB_ROOT)),
+            name="whisperlive-ui",
+        )
+
+        @app.get("/", include_in_schema=False)
+        async def dashboard():
+            return FileResponse(
+                self.WEB_ROOT / "index.html",
+                media_type="text/html",
+                headers={"Cache-Control": "no-cache"},
+            )
+
+        @app.get("/api/status", include_in_schema=False)
+        async def dashboard_status():
+            device, compute_type = resolve_runtime()
+            speaker_model = os.environ.get("WHISPERLIVE_SPEAKER_MODEL")
+            return {
+                "status": "ready",
+                "backend": backend,
+                "device": device,
+                "compute_type": compute_type,
+                "model": Path(model_path).name if model_path else "small",
+                "websocket_port": websocket_port,
+                "sample_rate": self.RATE,
+                "diarization_available": bool(
+                    speaker_model and Path(speaker_model).is_file()
+                ),
+            }
 
     def initialize_client(
         self, websocket, options, faster_whisper_custom_model_path,
@@ -677,6 +719,12 @@ class TranscriptionServer:
         # New OpenAI-compatible REST API (toggleable via enable_rest boolean)
         if enable_rest:
             app = FastAPI(title="WhisperLive OpenAI-Compatible API")
+            self.register_web_dashboard(
+                app,
+                backend=backend,
+                websocket_port=port,
+                model_path=faster_whisper_custom_model_path,
+            )
             origins = [o.strip() for o in cors_origins.split(',')] if cors_origins else []
             app.add_middleware(
                 CORSMiddleware,

@@ -14,7 +14,8 @@ to convert speech input into text output. It can be used to transcribe both live
 input from microphone and pre-recorded audio files.
 
 > **GTX 1080 Ti / Pascal:** this branch includes a lean single-image GPU
-> deployment with online speaker labels and a Nix development shell. See the
+> deployment with a built-in live browser console, online speaker labels, and
+> a Nix development shell. See the
 > [Pascal image guide](docs/pascal-1080ti.md).
 
 - [Installation](#installation)

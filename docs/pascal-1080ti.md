@@ -8,6 +8,7 @@ This branch provides one focused image for NVIDIA Pascal (`sm_61`):
 - CPU ONNX WeSpeaker embeddings for online speaker labels
 - WebSocket streaming on port 9090
 - OpenAI-compatible file/SSE REST API on port 8000
+- dependency-free live microphone console on port 8000
 
 It intentionally omits PyTorch, CUDA 13, cuDNN, NVRTC, Transformers,
 OpenVINO, TensorRT, pyannote, SciPy, librosa, and the training/evaluation
@@ -38,6 +39,22 @@ contains only Docker, Git, Just, uv, Ruff, and ShellCheck.
 
 The image auto-selects `int8_float32` on the GTX 1080 Ti. Set
 `WHISPERLIVE_COMPUTE_TYPE=float32` to compare accuracy or performance.
+
+## Browser console
+
+Open <http://127.0.0.1:8000/> in a browser on the machine running the
+container. The console captures the microphone, streams mono float32 PCM to
+the WebSocket endpoint, and shows:
+
+- the latest revisable partial phrase
+- completed transcript lines with online speaker labels
+- input level, elapsed time, estimated stream lag, and runtime details
+- the raw server event stream for debugging
+
+The console is plain HTML, CSS, and JavaScript served by the existing FastAPI
+process. It adds no Node runtime, web framework, or extra Python package to
+the image. Microphone capture requires a secure browser context; loopback
+addresses such as `127.0.0.1` and `localhost` qualify.
 
 ## Streaming protocol
 

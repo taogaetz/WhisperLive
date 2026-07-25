@@ -1,10 +1,14 @@
 import json
+import os
 import time
 import threading
 import collections
 import unittest
 from unittest import mock
 from unittest.mock import MagicMock, patch
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from whisper_live.server import TranscriptionServer, BackendType, ClientManager
 
@@ -240,6 +244,55 @@ class TestTranscriptionServerInit(unittest.TestCase):
         server = TranscriptionServer()
         with self.assertRaises(ValueError):
             server.run(host="localhost", port=9090, batch_enabled=True, batch_window_ms=-1)
+
+
+class TestWebDashboard(unittest.TestCase):
+    def setUp(self):
+        self.server = TranscriptionServer()
+        self.app = FastAPI()
+        self.server.register_web_dashboard(
+            self.app,
+            backend="faster_whisper",
+            websocket_port=9090,
+            model_path="/opt/models/faster-whisper-small.en",
+        )
+        self.client = TestClient(self.app)
+
+    def test_dashboard_and_assets_are_served(self):
+        dashboard = self.client.get("/")
+        script = self.client.get("/ui/app.js")
+        worklet = self.client.get("/ui/audio-worklet.js")
+
+        self.assertEqual(dashboard.status_code, 200)
+        self.assertIn("WhisperLive · Pascal console", dashboard.text)
+        self.assertEqual(dashboard.headers["cache-control"], "no-cache")
+        self.assertEqual(script.status_code, 200)
+        self.assertIn("new WebSocket", script.text)
+        self.assertEqual(worklet.status_code, 200)
+        self.assertIn("registerProcessor", worklet.text)
+
+    @patch("whisper_live.server.resolve_runtime", return_value=("cuda", "float16"))
+    def test_status_describes_streaming_runtime(self, _resolve_runtime):
+        with patch.dict(
+            os.environ,
+            {"WHISPERLIVE_SPEAKER_MODEL": "/does/not/exist.onnx"},
+        ):
+            response = self.client.get("/api/status")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "status": "ready",
+                "backend": "faster_whisper",
+                "device": "cuda",
+                "compute_type": "float16",
+                "model": "faster-whisper-small.en",
+                "websocket_port": 9090,
+                "sample_rate": 16000,
+                "diarization_available": False,
+            },
+        )
 
 
 class TestTranscriptionServerGetAudio(unittest.TestCase):
