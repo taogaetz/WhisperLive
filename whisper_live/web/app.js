@@ -266,18 +266,21 @@ function handleServerMessage(event) {
   }
   appendEvent(payload);
 
-  if (payload.status === "SERVER_READY") {
+  // WhisperLive uses `message` for SERVER_READY and `status` for later
+  // lifecycle events. Normalize both shapes before gating microphone audio.
+  const messageType = payload.status || payload.message;
+  if (messageType === "SERVER_READY") {
     state.serverReady = true;
     setStreamState("LIVE", "live");
     elements.permissionHint.textContent = "Streaming 16 kHz audio to the local GPU.";
-  } else if (payload.status === "WAIT") {
+  } else if (messageType === "WAIT") {
     setStreamState("QUEUED", "waiting");
     elements.permissionHint.textContent = `GPU busy · estimated wait ${Number(payload.message).toFixed(1)} min`;
-  } else if (payload.status === "WARNING") {
+  } else if (messageType === "WARNING") {
     showError(payload.message || "The server returned a warning.");
-  } else if (payload.status === "ERROR") {
+  } else if (messageType === "ERROR") {
     showError(payload.message || "The server returned an error.");
-  } else if (payload.status === "DISCONNECT") {
+  } else if (messageType === "DISCONNECT") {
     showError(payload.message || "The server ended this session.");
     stopSession();
   }

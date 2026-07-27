@@ -268,6 +268,11 @@ class TestWebDashboard(unittest.TestCase):
         self.assertEqual(dashboard.headers["cache-control"], "no-cache")
         self.assertEqual(script.status_code, 200)
         self.assertIn("new WebSocket", script.text)
+        self.assertIn(
+            "const messageType = payload.status || payload.message;",
+            script.text,
+        )
+        self.assertIn('if (messageType === "SERVER_READY")', script.text)
         self.assertEqual(worklet.status_code, 200)
         self.assertIn("registerProcessor", worklet.text)
 
