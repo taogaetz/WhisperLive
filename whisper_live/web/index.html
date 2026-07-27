@@ -123,6 +123,44 @@
               </div>
             </div>
 
+            <section class="gpu-panel" aria-label="NVIDIA GPU telemetry">
+              <div class="gpu-panel-head">
+                <div>
+                  <p class="section-label">GPU / LIVE</p>
+                  <strong id="gpuName">NVIDIA telemetry</strong>
+                </div>
+                <span id="sessionValue">0 / 4 sessions</span>
+              </div>
+              <div class="gpu-grid">
+                <div class="gpu-gauge">
+                  <span>GPU LOAD</span>
+                  <strong id="gpuUtilValue">—</strong>
+                  <div class="gpu-track"><i id="gpuUtilMeter"></i></div>
+                </div>
+                <div class="gpu-gauge">
+                  <span>VRAM</span>
+                  <strong id="gpuMemoryValue">—</strong>
+                  <div class="gpu-track"><i id="gpuMemoryMeter"></i></div>
+                </div>
+                <div class="gpu-stat">
+                  <span>TEMP</span>
+                  <strong id="gpuTempValue">—</strong>
+                </div>
+                <div class="gpu-stat">
+                  <span>POWER</span>
+                  <strong id="gpuPowerValue">—</strong>
+                </div>
+                <div class="gpu-stat">
+                  <span>CLOCK</span>
+                  <strong id="gpuClockValue">—</strong>
+                </div>
+                <div class="gpu-stat">
+                  <span>FAN</span>
+                  <strong id="gpuFanValue">—</strong>
+                </div>
+              </div>
+            </section>
+
             <div class="error-banner" id="errorBanner" role="alert" hidden></div>
 
             <div class="transcript-scroll" id="transcriptScroll">

@@ -8,6 +8,7 @@ import functools
 import logging
 import shutil
 import tempfile
+import asyncio
 from pathlib import Path
 from typing import Optional, List
 from fastapi import FastAPI, UploadFile, Form, Request, File
@@ -26,6 +27,7 @@ from websockets.sync.server import serve
 from websockets.exceptions import ConnectionClosed
 from whisper_live.backend.base import ServeClientBase
 from whisper_live.runtime import resolve_runtime
+from whisper_live.telemetry import NvidiaTelemetry
 
 logging.basicConfig(level=logging.INFO)
 
@@ -100,6 +102,22 @@ class ClientManager:
                 if wait_time is None or current_client_time_remaining < wait_time:
                     wait_time = current_client_time_remaining
         return wait_time / 60 if wait_time is not None else 0
+
+    def snapshot(self):
+        """Return aggregate session capacity without exposing client IDs."""
+        with self.lock:
+            active = len(self.clients)
+            oldest = (
+                max(0.0, time.time() - min(self.start_times.values()))
+                if self.start_times
+                else 0.0
+            )
+            return {
+                "active": active,
+                "capacity": self.max_clients,
+                "max_connection_seconds": self.max_connection_time,
+                "oldest_session_seconds": round(oldest, 1),
+            }
 
     def is_server_full(self, websocket, options):
         """
@@ -181,6 +199,7 @@ class TranscriptionServer:
         self.raw_pcm_input = False
         self.audio_formats = {}
         self.segment_post_processor = None
+        self.gpu_telemetry = NvidiaTelemetry()
 
     def register_web_dashboard(
         self,
@@ -190,6 +209,11 @@ class TranscriptionServer:
         model_path: Optional[str],
     ) -> None:
         """Serve the dependency-free browser client alongside the REST API."""
+        dev_mode = os.environ.get("WHISPERLIVE_DEV_MODE") == "1"
+        public_websocket_port = int(
+            os.environ.get("WHISPERLIVE_WEBSOCKET_PUBLIC_PORT", websocket_port)
+        )
+
         app.mount(
             "/ui",
             StaticFiles(directory=str(self.WEB_ROOT)),
@@ -214,12 +238,65 @@ class TranscriptionServer:
                 "device": device,
                 "compute_type": compute_type,
                 "model": Path(model_path).name if model_path else "small",
-                "websocket_port": websocket_port,
+                "websocket_port": public_websocket_port,
                 "sample_rate": self.RATE,
+                "dev_mode": dev_mode,
                 "diarization_available": bool(
                     speaker_model and Path(speaker_model).is_file()
                 ),
             }
+
+        @app.get("/api/telemetry", include_in_schema=False)
+        async def dashboard_telemetry():
+            sessions = (
+                self.client_manager.snapshot()
+                if self.client_manager is not None
+                else {
+                    "active": 0,
+                    "capacity": 0,
+                    "max_connection_seconds": 0,
+                    "oldest_session_seconds": 0.0,
+                }
+            )
+            return {
+                "gpu": await asyncio.to_thread(self.gpu_telemetry.snapshot),
+                "sessions": sessions,
+            }
+
+        if dev_mode:
+
+            @app.get("/api/dev/events", include_in_schema=False)
+            async def dashboard_dev_events(request: Request):
+                async def changes():
+                    known = self._web_assets_mtime()
+                    while not await request.is_disconnected():
+                        await asyncio.sleep(0.4)
+                        current = self._web_assets_mtime()
+                        if current != known:
+                            known = current
+                            yield "event: reload\ndata: changed\n\n"
+
+                return StreamingResponse(
+                    changes(),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+
+    def _web_assets_mtime(self):
+        """Return a change token for dependency-free dashboard live reload."""
+        assets = []
+        for path in self.WEB_ROOT.rglob("*"):
+            if path.is_file():
+                try:
+                    stat = path.stat()
+                    assets.append((str(path), stat.st_mtime_ns, stat.st_size))
+                except OSError:
+                    # Editors may briefly replace a file atomically.
+                    continue
+        return hash(tuple(sorted(assets)))
 
     def initialize_client(
         self, websocket, options, faster_whisper_custom_model_path,

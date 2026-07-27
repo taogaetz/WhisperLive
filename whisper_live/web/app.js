@@ -17,6 +17,16 @@ const elements = {
   elapsedValue: document.querySelector("#elapsedValue"),
   latencyValue: document.querySelector("#latencyValue"),
   eventValue: document.querySelector("#eventValue"),
+  gpuName: document.querySelector("#gpuName"),
+  sessionValue: document.querySelector("#sessionValue"),
+  gpuUtilValue: document.querySelector("#gpuUtilValue"),
+  gpuUtilMeter: document.querySelector("#gpuUtilMeter"),
+  gpuMemoryValue: document.querySelector("#gpuMemoryValue"),
+  gpuMemoryMeter: document.querySelector("#gpuMemoryMeter"),
+  gpuTempValue: document.querySelector("#gpuTempValue"),
+  gpuPowerValue: document.querySelector("#gpuPowerValue"),
+  gpuClockValue: document.querySelector("#gpuClockValue"),
+  gpuFanValue: document.querySelector("#gpuFanValue"),
   errorBanner: document.querySelector("#errorBanner"),
   transcriptScroll: document.querySelector("#transcriptScroll"),
   emptyState: document.querySelector("#emptyState"),
@@ -46,6 +56,8 @@ const state = {
   partial: null,
   events: [],
   timer: null,
+  telemetryTimer: null,
+  devEvents: null,
 };
 
 class StreamingResampler {
@@ -242,12 +254,84 @@ async function loadStatus() {
     if (!state.server.diarization_available) {
       elements.diarizationToggle.checked = false;
     }
-    setServerState("ready", `${state.server.device.toUpperCase()} · READY`);
+    const mode = state.server.dev_mode ? " · DEV" : "";
+    setServerState(
+      "ready",
+      `${state.server.device.toUpperCase()} · READY${mode}`,
+    );
     elements.recordButton.disabled = false;
+    enableDevReload();
+    await loadTelemetry();
+    state.telemetryTimer = window.setInterval(loadTelemetry, 1000);
   } catch (error) {
     setServerState("error", "Server unavailable");
     showError(`Could not reach WhisperLive: ${error.message}`);
   }
+}
+
+function setMeter(element, percent) {
+  const safe = Math.max(0, Math.min(100, Number(percent) || 0));
+  element.style.width = `${safe}%`;
+}
+
+function renderTelemetry(payload) {
+  const gpu = payload.gpu || {};
+  const sessions = payload.sessions || {};
+  elements.sessionValue.textContent =
+    `${sessions.active ?? 0} / ${sessions.capacity ?? 0} sessions`;
+
+  if (!gpu.available) {
+    elements.gpuName.textContent = "NVIDIA telemetry unavailable";
+    [
+      elements.gpuUtilValue,
+      elements.gpuMemoryValue,
+      elements.gpuTempValue,
+      elements.gpuPowerValue,
+      elements.gpuClockValue,
+      elements.gpuFanValue,
+    ].forEach((element) => {
+      element.textContent = "—";
+    });
+    setMeter(elements.gpuUtilMeter, 0);
+    setMeter(elements.gpuMemoryMeter, 0);
+    return;
+  }
+
+  const used = Number(gpu.memory_used_mib) || 0;
+  const total = Number(gpu.memory_total_mib) || 0;
+  const memoryPercent = total ? (used / total) * 100 : 0;
+  elements.gpuName.textContent = gpu.name || `NVIDIA GPU ${gpu.index ?? 0}`;
+  elements.gpuUtilValue.textContent = `${gpu.utilization_percent ?? 0}%`;
+  elements.gpuMemoryValue.textContent =
+    `${(used / 1024).toFixed(1)} / ${(total / 1024).toFixed(1)} GB`;
+  elements.gpuTempValue.textContent =
+    gpu.temperature_c == null ? "—" : `${gpu.temperature_c}°C`;
+  elements.gpuPowerValue.textContent =
+    gpu.power_w == null ? "—" : `${Math.round(gpu.power_w)} W`;
+  elements.gpuClockValue.textContent =
+    gpu.graphics_clock_mhz == null ? "—" : `${gpu.graphics_clock_mhz} MHz`;
+  elements.gpuFanValue.textContent =
+    gpu.fan_percent == null ? "—" : `${gpu.fan_percent}%`;
+  setMeter(elements.gpuUtilMeter, gpu.utilization_percent);
+  setMeter(elements.gpuMemoryMeter, memoryPercent);
+}
+
+async function loadTelemetry() {
+  try {
+    const response = await fetch("/api/telemetry", { cache: "no-store" });
+    if (!response.ok) return;
+    renderTelemetry(await response.json());
+  } catch {
+    // The main status indicator already reports server connectivity.
+  }
+}
+
+function enableDevReload() {
+  if (!state.server?.dev_mode || !window.EventSource || state.devEvents) return;
+  state.devEvents = new EventSource("/api/dev/events");
+  state.devEvents.addEventListener("reload", () => {
+    window.location.reload();
+  });
 }
 
 function websocketUrl() {
@@ -459,6 +543,8 @@ elements.copyButton.addEventListener("click", () => {
   copyTranscript().catch((error) => showError(`Copy failed: ${error.message}`));
 });
 window.addEventListener("beforeunload", () => {
+  window.clearInterval(state.telemetryTimer);
+  state.devEvents?.close();
   state.mediaStream?.getTracks().forEach((track) => track.stop());
   state.socket?.close();
 });

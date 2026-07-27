@@ -40,6 +40,17 @@ class TestClientManagerAddRemove(unittest.TestCase):
         ws = MagicMock()
         self.cm.remove_client(ws)  # should not raise
 
+    def test_snapshot_is_aggregate_and_contains_no_client_ids(self):
+        ws = MagicMock()
+        self.cm.add_client(ws, MagicMock())
+        snapshot = self.cm.snapshot()
+
+        self.assertEqual(snapshot["active"], 1)
+        self.assertEqual(snapshot["capacity"], 2)
+        self.assertEqual(snapshot["max_connection_seconds"], 60)
+        self.assertGreaterEqual(snapshot["oldest_session_seconds"], 0)
+        self.assertNotIn("uid", snapshot)
+
 
 class TestClientManagerThreadSafety(unittest.TestCase):
     def test_concurrent_add_remove(self):
@@ -265,6 +276,7 @@ class TestWebDashboard(unittest.TestCase):
 
         self.assertEqual(dashboard.status_code, 200)
         self.assertIn("WhisperLive · Pascal console", dashboard.text)
+        self.assertIn("NVIDIA GPU telemetry", dashboard.text)
         self.assertEqual(dashboard.headers["cache-control"], "no-cache")
         self.assertEqual(script.status_code, 200)
         self.assertIn("new WebSocket", script.text)
@@ -295,9 +307,31 @@ class TestWebDashboard(unittest.TestCase):
                 "model": "faster-whisper-small.en",
                 "websocket_port": 9090,
                 "sample_rate": 16000,
+                "dev_mode": False,
                 "diarization_available": False,
             },
         )
+
+    def test_telemetry_reports_gpu_and_aggregate_sessions(self):
+        self.server.client_manager = ClientManager(
+            max_clients=4,
+            max_connection_time=300,
+        )
+        self.server.gpu_telemetry.snapshot = MagicMock(
+            return_value={
+                "available": True,
+                "name": "NVIDIA GeForce GTX 1080 Ti",
+                "utilization_percent": 42,
+            },
+        )
+
+        response = self.client.get("/api/telemetry")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["gpu"]["utilization_percent"], 42)
+        self.assertEqual(payload["sessions"]["active"], 0)
+        self.assertEqual(payload["sessions"]["capacity"], 4)
 
 
 class TestTranscriptionServerGetAudio(unittest.TestCase):

@@ -49,12 +49,53 @@ the WebSocket endpoint, and shows:
 - the latest revisable partial phrase
 - completed transcript lines with online speaker labels
 - input level, elapsed time, estimated stream lag, and runtime details
+- live GPU load, VRAM, temperature, power, clock, fan, and session capacity
 - the raw server event stream for debugging
 
 The console is plain HTML, CSS, and JavaScript served by the existing FastAPI
 process. It adds no Node runtime, web framework, or extra Python package to
 the image. Microphone capture requires a secure browser context; loopback
 addresses such as `127.0.0.1` and `localhost` qualify.
+
+## Contained dashboard development
+
+The development server uses the same runtime image and GPU stack as
+production, but publishes separate loopback ports:
+
+```console
+nix develop
+just dev
+```
+
+Open <http://127.0.0.1:18000/>. The WebSocket endpoint is on port 19090.
+`whisper_live/web` is bind-mounted read-only into the container, and the
+browser automatically reloads when its HTML, CSS, JavaScript, or worklet
+changes. There is no Node process and no Python package installed on the
+host.
+
+Use `just dev-up`, `just dev-logs`, and `just dev-stop` for a detached
+container. Backend Python changes require restarting the development
+container, but Docker reuses the dependency and model layers.
+
+On a host where Docker requires privilege escalation, prefix recipes with
+`DOCKER="sudo docker"`, for example:
+
+```console
+DOCKER="sudo docker" just dev-up
+```
+
+## Concurrent sessions
+
+Opening the page does not allocate a transcription session. Each press of
+**Start microphone** opens a new WebSocket connection with an independent
+UUID, audio buffer, transcript, and diarization speaker state. The shared
+Whisper model is loaded once; inference calls are serialized unless batch
+inference is explicitly enabled.
+
+The default limit is four active sessions and five minutes per connection.
+An additional client receives `WAIT` and is disconnected; it is not currently
+placed in a durable queue. Reloading or closing the page ends that session,
+and dashboard transcripts are not persisted on the server.
 
 ## Streaming protocol
 

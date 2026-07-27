@@ -55,7 +55,7 @@ RUN python -m pip install --no-cache-dir httpx==0.28.1 pytest==8.4.2
 COPY tests /app/tests
 RUN chmod -R a+rX /app/tests
 USER whisperlive
-CMD ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/test_runtime.py", "tests/test_diarization.py", "tests/test_base_backend.py", "tests/test_server_extended.py", "tests/test_metrics.py"]
+CMD ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/test_runtime.py", "tests/test_diarization.py", "tests/test_base_backend.py", "tests/test_server_extended.py", "tests/test_telemetry.py", "tests/test_metrics.py"]
 
 FROM app AS runtime
 
