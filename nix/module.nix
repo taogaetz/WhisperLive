@@ -13,7 +13,7 @@ in
 
     image = lib.mkOption {
       type = lib.types.str;
-      default = "ghcr.io/taogaetz/whisperlive@sha256:4d1a26bed71b8b5e76f74fc916d0932bf972c2bdee9b9030114c1a6017c3bd97";
+      default = "ghcr.io/taogaetz/whisperlive@sha256:7f986191e4bfe4b96d7a177520fb264e60010a3941462f192ab5abc6e080ac20";
       description = "OCI image reference pinned to a published Pascal image.";
     };
 
