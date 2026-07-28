@@ -1,0 +1,14 @@
+faster-whisper large-v3-turbo model
+
+Source:
+  https://huggingface.co/dropbox-dash/faster-whisper-large-v3-turbo
+
+Revision:
+  0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf
+
+License:
+  MIT
+  https://opensource.org/license/mit
+
+The model card attributes the CTranslate2 conversion to Dropbox Dash and the
+original Whisper large-v3-turbo model to OpenAI.

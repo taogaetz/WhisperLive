@@ -1,5 +1,4 @@
 import json
-import queue
 import threading
 import time
 import unittest
@@ -58,7 +57,6 @@ class TestServeClientBaseInit(unittest.TestCase):
 
     def test_custom_values(self):
         ws = MagicMock()
-        q = queue.Queue()
         client = ConcreteServeClient(
             client_uid="uid2",
             websocket=ws,
@@ -66,13 +64,11 @@ class TestServeClientBaseInit(unittest.TestCase):
             no_speech_thresh=0.6,
             clip_audio=True,
             same_output_threshold=20,
-            translation_queue=q,
         )
         self.assertEqual(client.send_last_n_segments, 5)
         self.assertAlmostEqual(client.no_speech_thresh, 0.6)
         self.assertTrue(client.clip_audio)
         self.assertEqual(client.same_output_threshold, 20)
-        self.assertIs(client.translation_queue, q)
 
 
 class TestAddFrames(unittest.TestCase):
@@ -109,6 +105,7 @@ class TestAddFrames(unittest.TestCase):
         # timestamp_offset should be bumped to at least frames_offset
         self.assertGreaterEqual(self.client.timestamp_offset, self.client.frames_offset)
 
+
 class TestAddFramesThreadSafety(unittest.TestCase):
     def test_concurrent_add_frames(self):
         ws = MagicMock()
@@ -136,7 +133,9 @@ class TestAddFramesThreadSafety(unittest.TestCase):
         client = ConcreteServeClient(client_uid="test", websocket=ws)
         client.frames_np = np.array([0.1], dtype=np.float32)
 
-        with patch("whisper_live.backend.base.np.concatenate", side_effect=RuntimeError("boom")):
+        with patch(
+            "whisper_live.backend.base.np.concatenate", side_effect=RuntimeError("boom")
+        ):
             with self.assertRaisesRegex(RuntimeError, "boom"):
                 client.add_frames(np.array([0.2], dtype=np.float32))
 
@@ -223,7 +222,12 @@ class TestPrepareSegments(unittest.TestCase):
 
     def test_more_than_n_segments_truncated(self):
         self.client.transcript = [
-            {"start": f"{i}.000", "end": f"{i+1}.000", "text": f"seg{i}", "completed": True}
+            {
+                "start": f"{i}.000",
+                "end": f"{i + 1}.000",
+                "text": f"seg{i}",
+                "completed": True,
+            }
             for i in range(10)
         ]
         segments = self.client.prepare_segments()
@@ -234,7 +238,12 @@ class TestPrepareSegments(unittest.TestCase):
         self.client.transcript = [
             {"start": "0.000", "end": "1.000", "text": "a", "completed": True},
         ]
-        last = {"start": "1.000", "end": "2.000", "text": "in progress", "completed": False}
+        last = {
+            "start": "1.000",
+            "end": "2.000",
+            "text": "in progress",
+            "completed": False,
+        }
         segments = self.client.prepare_segments(last_segment=last)
         self.assertEqual(len(segments), 2)
         self.assertEqual(segments[-1]["text"], "in progress")
@@ -275,6 +284,28 @@ class TestSendTranscriptionToClient(unittest.TestCase):
         # should not raise
         self.client.send_transcription_to_client([])
 
+    def test_transcript_sink_receives_sent_snapshot(self):
+        self.client.transcript_sink = MagicMock()
+        segments = [
+            {
+                "start": "0.000",
+                "end": "1.000",
+                "text": "stored",
+                "completed": True,
+            }
+        ]
+
+        self.client.send_transcription_to_client(segments)
+
+        self.client.transcript_sink.assert_called_once_with(segments)
+
+    def test_transcript_sink_failure_does_not_block_websocket(self):
+        self.client.transcript_sink = MagicMock(side_effect=OSError("disk full"))
+
+        self.client.send_transcription_to_client([])
+
+        self.ws.send.assert_called_once()
+
 
 class TestDisconnect(unittest.TestCase):
     def test_sends_disconnect_message(self):
@@ -304,6 +335,7 @@ def _supports_thread_time():
     except NotImplementedError:
         return False
     return True
+
 
 class TestSpeechToTextWaitingBehavior(unittest.TestCase):
     """Tests the first-frame wait behavior in speech_to_text()."""
@@ -398,7 +430,12 @@ class TestTrimTranscript(unittest.TestCase):
 
     def test_transcript_trimmed_when_over_max(self):
         self.client.transcript = [
-            {"start": f"{i}.000", "end": f"{i+1}.000", "text": f"seg{i}", "completed": True}
+            {
+                "start": f"{i}.000",
+                "end": f"{i + 1}.000",
+                "text": f"seg{i}",
+                "completed": True,
+            }
             for i in range(self.client.MAX_TRANSCRIPT_LENGTH + 100)
         ]
         self.client._trim_transcript()
@@ -480,21 +517,9 @@ class TestUpdateSegments(unittest.TestCase):
     def test_repeated_output_triggers_completion(self):
         seg = self._make_segment(0.0, 1.0, " repeated")
         for _ in range(self.client.same_output_threshold + 2):
-            last = self.client.update_segments([seg], duration=2.0)
+            self.client.update_segments([seg], duration=2.0)
         # after enough repeats, should be added to transcript
         self.assertTrue(len(self.client.transcript) >= 1)
-
-    def test_translation_queue_receives_completed(self):
-        q = queue.Queue()
-        self.client.translation_queue = q
-        segs = [
-            self._make_segment(0.0, 1.0, " first"),
-            self._make_segment(1.0, 2.0, " second"),
-        ]
-        self.client.update_segments(segs, duration=3.0)
-        self.assertFalse(q.empty())
-        item = q.get_nowait()
-        self.assertIn("first", item["text"])
 
     def test_timestamp_offset_advances(self):
         segs = [
@@ -571,7 +596,9 @@ class TestWordTimestamps(unittest.TestCase):
 
     def test_extract_words_when_disabled(self):
         client = self._make_client(word_timestamps=False)
-        seg = self._make_segment("hello", 0.0, 1.0, words=[self._make_word("hello", 0.0, 0.5, 0.99)])
+        seg = self._make_segment(
+            "hello", 0.0, 1.0, words=[self._make_word("hello", 0.0, 0.5, 0.99)]
+        )
         result = client._extract_words(seg, 0.0)
         self.assertIsNone(result)
 
@@ -604,7 +631,9 @@ class TestWordTimestamps(unittest.TestCase):
 
     def test_format_segment_with_words(self):
         client = self._make_client(word_timestamps=True)
-        words = [{"word": "hello", "start": "0.000", "end": "0.500", "probability": 0.95}]
+        words = [
+            {"word": "hello", "start": "0.000", "end": "0.500", "probability": 0.95}
+        ]
         seg = client.format_segment(0.0, 1.0, "hello", words=words)
         self.assertIn("words", seg)
         self.assertEqual(len(seg["words"]), 1)

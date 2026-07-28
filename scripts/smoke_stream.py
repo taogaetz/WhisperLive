@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal real-time WhisperLive WebSocket smoke client."""
+"""Minimal real-time PascalScribe WebSocket smoke client."""
 
 import argparse
 import json
@@ -52,13 +52,72 @@ def receive_available(websocket, messages, timeout, verbose=True):
         timeout = 0.01
 
 
+def validate_stream(messages):
+    """Verify that one WebSocket emits a stable, chronological transcript."""
+    completed_by_span = {}
+    newest_completed_start = float("-inf")
+    segment_messages = 0
+
+    for message_index, message in enumerate(messages):
+        segments = message.get("segments")
+        if not isinstance(segments, list) or not segments:
+            continue
+        segment_messages += 1
+        starts = [float(segment["start"]) for segment in segments]
+        if starts != sorted(starts):
+            raise RuntimeError(
+                f"Segments arrived out of order in message {message_index}: {starts}"
+            )
+
+        partials = [segment for segment in segments if not segment["completed"]]
+        if len(partials) > 1:
+            raise RuntimeError(
+                f"Message {message_index} contained multiple rolling partials"
+            )
+
+        completed = [segment for segment in segments if segment["completed"]]
+        if partials and completed:
+            partial_start = float(partials[0]["start"])
+            completed_end = float(completed[-1]["end"])
+            if partial_start + 0.05 < completed_end:
+                raise RuntimeError(
+                    f"Partial regressed behind completed audio in message {message_index}"
+                )
+
+        for segment in completed:
+            start = float(segment["start"])
+            span = (segment["start"], segment["end"])
+            normalized_text = " ".join(segment["text"].split())
+            previous_text = completed_by_span.get(span)
+            if previous_text is not None and previous_text != normalized_text:
+                raise RuntimeError(
+                    f"Completed segment {span} changed after it was emitted"
+                )
+            if previous_text is None:
+                if start + 0.05 < newest_completed_start:
+                    raise RuntimeError(
+                        f"A newly completed segment arrived out of order at {start:.3f}s"
+                    )
+                completed_by_span[span] = normalized_text
+                newest_completed_start = max(newest_completed_start, start)
+
+    return {
+        "message_count": segment_messages,
+        "completed_segment_count": len(completed_by_span),
+    }
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=9090)
+    parser.add_argument("--secure", action="store_true")
     parser.add_argument("--audio", nargs="+", required=True)
     parser.add_argument("--gap-seconds", type=float, default=0.8)
     parser.add_argument("--chunk-ms", type=int, default=250)
+    parser.add_argument("--same-output-threshold", type=int, default=10)
+    parser.add_argument("--settle-seconds", type=float, default=4)
+    parser.add_argument("--min-completed", type=int, default=1)
     parser.add_argument("--diarization", action="store_true")
     parser.add_argument("--expect-speakers", type=int)
     parser.add_argument("--no-realtime", action="store_true")
@@ -69,16 +128,21 @@ def main():
     chunk_samples = int(16000 * args.chunk_ms / 1000)
     messages = []
 
-    with connect(f"ws://{args.host}:{args.port}", open_timeout=10) as websocket:
+    scheme = "wss" if args.secure else "ws"
+    with connect(
+        f"{scheme}://{args.host}:{args.port}",
+        open_timeout=10,
+    ) as websocket:
         websocket.send(
             json.dumps(
                 {
                     "uid": str(uuid.uuid4()),
                     "language": "en",
                     "task": "transcribe",
-                    "model": "small.en",
+                    "model": "large-v3-turbo",
                     "use_vad": True,
                     "enable_diarization": args.diarization,
+                    "same_output_threshold": args.same_output_threshold,
                 }
             )
         )
@@ -98,7 +162,7 @@ def main():
             if not args.no_realtime:
                 time.sleep(len(chunk) / 16000)
 
-        deadline = time.monotonic() + 4
+        deadline = time.monotonic() + args.settle_seconds
         while time.monotonic() < deadline:
             receive_available(
                 websocket,
@@ -116,6 +180,12 @@ def main():
     completed = [segment for segment in segments.values() if segment["completed"]]
     if not segments:
         raise RuntimeError("Server returned no transcription segments")
+    stream_validation = validate_stream(messages)
+    if len(completed) < args.min_completed:
+        raise RuntimeError(
+            f"Expected at least {args.min_completed} completed segments, "
+            f"got {len(completed)}"
+        )
     if args.diarization and not any("speaker" in segment for segment in completed):
         raise RuntimeError("Diarization was requested but no speaker labels arrived")
 
@@ -136,6 +206,8 @@ def main():
                 "audio_seconds": round(len(audio) / 16000, 2),
                 "segments": completed or list(segments.values()),
                 "completed_speakers": completed_speakers,
+                "stream_consistent": True,
+                "stream_validation": stream_validation,
             },
             ensure_ascii=False,
             indent=2,

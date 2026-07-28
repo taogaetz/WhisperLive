@@ -5,16 +5,16 @@
 }:
 
 let
-  cfg = config.services.whisperlivePascal;
+  cfg = config.services.pascalScribe;
 in
 {
-  options.services.whisperlivePascal = {
-    enable = lib.mkEnableOption "WhisperLive tuned for NVIDIA Pascal GPUs";
+  options.services.pascalScribe = {
+    enable = lib.mkEnableOption "PascalScribe";
 
     image = lib.mkOption {
       type = lib.types.str;
-      default = "ghcr.io/taogaetz/whisperlive@sha256:7f986191e4bfe4b96d7a177520fb264e60010a3941462f192ab5abc6e080ac20";
-      description = "OCI image reference pinned to a published Pascal image.";
+      default = "ghcr.io/taogaetz/pascalscribe:1080ti";
+      description = "OCI image reference for the published 1080 Ti image.";
     };
 
     listenAddress = lib.mkOption {
@@ -35,10 +35,10 @@ in
       description = "Host port for the OpenAI-compatible REST API.";
     };
 
-    stateDirectory = lib.mkOption {
+    historyDirectory = lib.mkOption {
       type = lib.types.path;
-      default = "/var/lib/whisperlive";
-      description = "Persistent model and Hugging Face cache directory.";
+      default = "/var/lib/pascalscribe-history";
+      description = "Persistent transcript history directory.";
     };
 
     computeType = lib.mkOption {
@@ -52,22 +52,22 @@ in
   config = lib.mkIf cfg.enable {
     virtualisation.docker.enable = true;
     virtualisation.oci-containers.backend = "docker";
-    virtualisation.oci-containers.containers.whisperlive-pascal = {
+    virtualisation.oci-containers.containers.pascalscribe = {
       image = cfg.image;
       autoStart = true;
       ports = [
         "${cfg.listenAddress}:${toString cfg.websocketPort}:9090"
         "${cfg.listenAddress}:${toString cfg.restPort}:8000"
       ];
-      volumes = [ "${cfg.stateDirectory}:/models" ];
+      volumes = [ "${cfg.historyDirectory}:/data" ];
       environment = lib.optionalAttrs (cfg.computeType != null) {
-        WHISPERLIVE_COMPUTE_TYPE = cfg.computeType;
+        PASCALSCRIBE_COMPUTE_TYPE = cfg.computeType;
       };
       extraOptions = [ "--device=nvidia.com/gpu=all" ];
     };
 
     systemd.tmpfiles.rules = [
-      "d ${cfg.stateDirectory} 0750 10001 10001 -"
+      "d ${cfg.historyDirectory} 0750 10001 10001 -"
     ];
   };
 }

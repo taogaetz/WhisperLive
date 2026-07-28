@@ -11,7 +11,7 @@ import os
 import numpy as np
 
 
-DEFAULT_EMBEDDING_MODEL = "/opt/whisperlive/models/wespeaker-voxceleb-resnet34-LM.onnx"
+DEFAULT_EMBEDDING_MODEL = "/opt/pascalscribe/models/wespeaker-voxceleb-resnet34-LM.onnx"
 
 
 def load_audio(file_path, sample_rate=16000):
@@ -134,7 +134,7 @@ class SpeakerDiarizer:
         self._model = None
         self._embedding_model_name = (
             embedding_model
-            or os.getenv("WHISPERLIVE_SPEAKER_MODEL")
+            or os.getenv("PASCALSCRIBE_SPEAKER_MODEL")
             or DEFAULT_EMBEDDING_MODEL
         )
         self._hf_token = hf_token

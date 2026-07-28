@@ -14,10 +14,5 @@ id_rsa*
 secrets
 **/secrets
 assets
-Audio-Transcription-Chrome
-Audio-Transcription-Firefox
-Audio-Transcription-iOS
-docs
-whisper-finetuning
 *.pyc
 __pycache__

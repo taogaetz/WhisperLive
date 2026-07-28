@@ -1,5 +1,5 @@
 {
-  description = "WhisperLive development tools and Pascal NixOS module";
+  description = "PascalScribe development tools and NixOS module";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
 
@@ -22,7 +22,7 @@
 
         shellHook = ''
           export DOCKER_BUILDKIT=1
-          echo "WhisperLive Pascal shell: just test | just build | just run"
+          echo "PascalScribe shell: just test | just build | just run"
         '';
       };
 

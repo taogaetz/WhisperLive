@@ -2,10 +2,7 @@ import json
 import logging
 import threading
 import time
-import queue
 import numpy as np
-
-from whisper_live import metrics as wl_metrics
 
 
 class ServeClientBase(object):
@@ -38,7 +35,6 @@ class ServeClientBase(object):
     """Number of repeated outputs before considering it as a valid segment."""
 
     MAX_TRANSCRIPT_LENGTH = 500
-    MAX_TRANSLATION_QUEUE_SIZE = 100
 
     def __init__(
         self,
@@ -48,7 +44,6 @@ class ServeClientBase(object):
         no_speech_thresh=0.45,
         clip_audio=False,
         same_output_threshold=10,
-        translation_queue=None,
         diarization=None,
         word_timestamps=False,
     ):
@@ -72,14 +67,16 @@ class ServeClientBase(object):
         self.same_output_count = 0
         self.transcript = []
         self.end_time_for_same_output = None
-        self.translation_queue = translation_queue
 
         # Optional post-processing callable for segments.
         # If set, called with a segment dict and must return a segment dict.
         # Allows external projects to plug in custom post-processing
         # (e.g. PII redaction, formatting, diarization) without modifying
-        # WhisperLive's core code.
+        # the streaming core.
         self.segment_post_processor = None
+        # Optional callable that receives the current segment snapshot. The
+        # Pascal dashboard uses this to persist completed transcript segments.
+        self.transcript_sink = None
 
         # threading
         self.lock = threading.Lock()
@@ -116,24 +113,22 @@ class ServeClientBase(object):
 
             input_bytes, duration = self.get_audio_chunk_for_processing()
             if duration < 1.0:
-                time.sleep(0.1)     # wait for audio chunks to arrive
+                time.sleep(0.1)  # wait for audio chunks to arrive
                 continue
             try:
                 input_sample = input_bytes.copy()
-                t0 = time.time()
                 result = self.transcribe_audio(input_sample)
 
                 if result is None or self.language is None:
                     self.timestamp_offset += duration
-                    time.sleep(0.25)    # wait for voice activity, result is None when no voice activity
+                    time.sleep(
+                        0.25
+                    )  # wait for voice activity, result is None when no voice activity
                     continue
-                wl_metrics.track_transcription_latency(time.time() - t0)
-                wl_metrics.track_audio_processed(duration)
                 self.handle_transcription_output(result, duration)
 
             except Exception as e:
                 logging.error(f"[ERROR]: Failed to transcribe audio chunk: {e}")
-                wl_metrics.track_error("transcription")
                 time.sleep(0.01)
 
     def transcribe_audio(self):
@@ -141,8 +136,10 @@ class ServeClientBase(object):
 
     def handle_transcription_output(self, result, duration):
         raise NotImplementedError
-    
-    def format_segment(self, start, end, text, completed=False, speaker=None, words=None):
+
+    def format_segment(
+        self, start, end, text, completed=False, speaker=None, words=None
+    ):
         """
         Formats a transcription segment with precise start and end times alongside the transcribed text.
 
@@ -159,15 +156,15 @@ class ServeClientBase(object):
                 of the transcription.
         """
         seg = {
-            'start': "{:.3f}".format(start),
-            'end': "{:.3f}".format(end),
-            'text': text,
-            'completed': completed,
+            "start": "{:.3f}".format(start),
+            "end": "{:.3f}".format(end),
+            "text": text,
+            "completed": completed,
         }
         if speaker is not None:
-            seg['speaker'] = speaker
+            seg["speaker"] = speaker
         if words is not None:
-            seg['words'] = words
+            seg["words"] = words
         return seg
 
     def add_frames(self, frame_np):
@@ -188,9 +185,14 @@ class ServeClientBase(object):
 
         """
         with self.lock:
-            if self.frames_np is not None and self.frames_np.shape[0] > self.MAX_BUFFER_DURATION_S*self.RATE:
+            if (
+                self.frames_np is not None
+                and self.frames_np.shape[0] > self.MAX_BUFFER_DURATION_S * self.RATE
+            ):
                 self.frames_offset += float(self.BUFFER_TRIM_DURATION_S)
-                self.frames_np = self.frames_np[int(self.BUFFER_TRIM_DURATION_S*self.RATE):]
+                self.frames_np = self.frames_np[
+                    int(self.BUFFER_TRIM_DURATION_S * self.RATE) :
+                ]
                 # check timestamp offset(should be >= self.frame_offset)
                 # this basically means that there is no speech as timestamp offset hasnt updated
                 # and is less than frame_offset
@@ -209,9 +211,16 @@ class ServeClientBase(object):
         no valid segment for the last 30 seconds from whisper
         """
         with self.lock:
-            if self.frames_np[int((self.timestamp_offset - self.frames_offset)*self.RATE):].shape[0] > self.CLIP_THRESHOLD_DURATION_S * self.RATE:
+            if (
+                self.frames_np[
+                    int((self.timestamp_offset - self.frames_offset) * self.RATE) :
+                ].shape[0]
+                > self.CLIP_THRESHOLD_DURATION_S * self.RATE
+            ):
                 duration = self.frames_np.shape[0] / self.RATE
-                self.timestamp_offset = self.frames_offset + duration - self.CLIP_TAIL_DURATION_S
+                self.timestamp_offset = (
+                    self.frames_offset + duration - self.CLIP_TAIL_DURATION_S
+                )
 
     def get_audio_chunk_for_processing(self):
         """
@@ -228,8 +237,10 @@ class ServeClientBase(object):
                 - duration (float): The duration of the audio chunk in seconds.
         """
         with self.lock:
-            samples_take = max(0, (self.timestamp_offset - self.frames_offset) * self.RATE)
-            input_bytes = self.frames_np[int(samples_take):].copy()
+            samples_take = max(
+                0, (self.timestamp_offset - self.frames_offset) * self.RATE
+            )
+            input_bytes = self.frames_np[int(samples_take) :].copy()
         duration = input_bytes.shape[0] / self.RATE
         return input_bytes, duration
 
@@ -251,7 +262,7 @@ class ServeClientBase(object):
         """
         segments = []
         if len(self.transcript) >= self.send_last_n_segments:
-            segments = self.transcript[-self.send_last_n_segments:].copy()
+            segments = self.transcript[-self.send_last_n_segments :].copy()
         else:
             segments = self.transcript.copy()
         if last_segment is not None:
@@ -294,15 +305,21 @@ class ServeClientBase(object):
                     processed.append(seg)
             segments = processed
 
+        if self.transcript_sink is not None:
+            try:
+                self.transcript_sink(segments)
+            except Exception as e:
+                logging.error(f"[ERROR]: transcript_sink failed: {e}")
+
         try:
             self.websocket.send(
-                json.dumps({
-                    "uid": self.client_uid,
-                    "segments": segments,
-                })
+                json.dumps(
+                    {
+                        "uid": self.client_uid,
+                        "segments": segments,
+                    }
+                )
             )
-            for seg in segments:
-                wl_metrics.track_segment_emitted(completed=seg.get("completed", False))
         except Exception as e:
             logging.error(f"[ERROR]: Sending data to client: {e}")
 
@@ -314,10 +331,9 @@ class ServeClientBase(object):
         that the transcription service is disconnecting gracefully.
 
         """
-        self.websocket.send(json.dumps({
-            "uid": self.client_uid,
-            "message": self.DISCONNECT
-        }))
+        self.websocket.send(
+            json.dumps({"uid": self.client_uid, "message": self.DISCONNECT})
+        )
 
     def cleanup(self):
         """
@@ -331,7 +347,7 @@ class ServeClientBase(object):
         logging.info("Cleaning up.")
         self.exit = True
         self.frames_ready.set()
-    
+
     def get_segment_no_speech_prob(self, segment):
         return getattr(segment, "no_speech_prob", 0)
 
@@ -359,8 +375,12 @@ class ServeClientBase(object):
         try:
             start_sample = int(seg_start * self.RATE)
             end_sample = int(seg_end * self.RATE)
-            samples_offset = max(0, int((self.timestamp_offset - self.frames_offset) * self.RATE))
-            audio_slice = self.frames_np[samples_offset + start_sample:samples_offset + end_sample]
+            samples_offset = max(
+                0, int((self.timestamp_offset - self.frames_offset) * self.RATE)
+            )
+            audio_slice = self.frames_np[
+                samples_offset + start_sample : samples_offset + end_sample
+            ]
             if len(audio_slice) < self.RATE * 0.3:
                 return None
             return self.diarization.identify_speaker(audio_slice, self.RATE)
@@ -388,22 +408,25 @@ class ServeClientBase(object):
     def update_segments(self, segments, duration):
         """
         Processes the segments from Whisper and updates the transcript.
-        Uses helper methods to account for differences between backends.
-        
+        Uses helpers shared by streaming transcription output.
+
         Args:
             segments (list): List of segments returned by the transcriber.
             duration (float): Duration of the current audio chunk.
-        
+
         Returns:
             dict or None: The last processed segment (if any).
         """
         offset = None
-        self.current_out = ''
+        self.current_out = ""
         last_segment = None
 
         # Process complete segments only if there are more than one
         # and if the last segment's no_speech_prob is below the threshold.
-        if len(segments) > 1 and self.get_segment_no_speech_prob(segments[-1]) <= self.no_speech_thresh:
+        if (
+            len(segments) > 1
+            and self.get_segment_no_speech_prob(segments[-1]) <= self.no_speech_thresh
+        ):
             for s in segments[:-1]:
                 text_ = s.text
                 self.text.append(text_)
@@ -416,14 +439,11 @@ class ServeClientBase(object):
                     continue
                 speaker = self._identify_speaker(s)
                 words = self._extract_words(s, self.timestamp_offset)
-                completed_segment = self.format_segment(start, end, text_, completed=True, speaker=speaker, words=words)
+                completed_segment = self.format_segment(
+                    start, end, text_, completed=True, speaker=speaker, words=words
+                )
                 self.transcript.append(completed_segment)
 
-                if self.translation_queue:
-                    try:
-                        self.translation_queue.put(completed_segment.copy(), timeout=0.1)
-                    except queue.Full:
-                        logging.warning("Translation queue is full, skipping segment")
                 offset = min(duration, self.get_segment_end(s))
 
         # Process the last segment if its no_speech_prob is acceptable.
@@ -433,17 +453,18 @@ class ServeClientBase(object):
             with self.lock:
                 last_segment = self.format_segment(
                     self.timestamp_offset + self.get_segment_start(segments[-1]),
-                    self.timestamp_offset + min(duration, self.get_segment_end(segments[-1])),
+                    self.timestamp_offset
+                    + min(duration, self.get_segment_end(segments[-1])),
                     self.current_out,
                     completed=False,
-                    words=words
+                    words=words,
                 )
 
         # Handle repeated output logic.
-        if self.current_out.strip() == self.prev_out.strip() and self.current_out != '':
+        if self.current_out.strip() == self.prev_out.strip() and self.current_out != "":
             self.same_output_count += 1
 
-            # if we remove the audio because of same output on the nth reptition we might remove the 
+            # if we remove the audio because of same output on the nth reptition we might remove the
             # audio thats not yet transcribed so, capturing the time when it was repeated for the first time
             if self.end_time_for_same_output is None:
                 self.end_time_for_same_output = self.get_segment_end(segments[-1])
@@ -455,7 +476,10 @@ class ServeClientBase(object):
         # If the same incomplete segment is repeated too many times,
         # append it to the transcript and update the offset.
         if self.same_output_count > self.same_output_threshold:
-            if not self.text or self.text[-1].strip().lower() != self.current_out.strip().lower():
+            if (
+                not self.text
+                or self.text[-1].strip().lower() != self.current_out.strip().lower()
+            ):
                 self.text.append(self.current_out)
                 with self.lock:
                     segment_end = min(duration, self.end_time_for_same_output)
@@ -469,13 +493,7 @@ class ServeClientBase(object):
                     )
                     self.transcript.append(completed_segment)
 
-                    if self.translation_queue:
-                        try:
-                            self.translation_queue.put(completed_segment.copy(), timeout=0.1)
-                        except queue.Full:
-                            logging.warning("Translation queue is full, skipping segment")
-
-            self.current_out = ''
+            self.current_out = ""
             offset = min(duration, self.end_time_for_same_output)
             self.same_output_count = 0
             last_segment = None
@@ -493,6 +511,6 @@ class ServeClientBase(object):
     def _trim_transcript(self):
         """Trims transcript and text lists to prevent unbounded memory growth."""
         if len(self.transcript) > self.MAX_TRANSCRIPT_LENGTH:
-            self.transcript = self.transcript[-self.MAX_TRANSCRIPT_LENGTH:]
+            self.transcript = self.transcript[-self.MAX_TRANSCRIPT_LENGTH :]
         if len(self.text) > self.MAX_TRANSCRIPT_LENGTH:
-            self.text = self.text[-self.MAX_TRANSCRIPT_LENGTH:]
+            self.text = self.text[-self.MAX_TRANSCRIPT_LENGTH :]

@@ -22,4 +22,4 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
   }
 }
 
-registerProcessor("whisperlive-pcm-capture", PcmCaptureProcessor);
+registerProcessor("pascalscribe-pcm-capture", PcmCaptureProcessor);

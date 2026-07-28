@@ -14,7 +14,7 @@ def resolve_device(requested=None):
 
 def resolve_compute_type(device, requested=None):
     """Select a compute type supported by the chosen CTranslate2 device."""
-    configured = requested or os.getenv("WHISPERLIVE_COMPUTE_TYPE")
+    configured = requested or os.getenv("PASCALSCRIBE_COMPUTE_TYPE")
     supported = ctranslate2.get_supported_compute_types(device)
 
     if configured:

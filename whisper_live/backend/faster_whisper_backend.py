@@ -1,10 +1,6 @@
-import os
 import json
 import logging
 import threading
-import time
-import ctranslate2
-from huggingface_hub import snapshot_download
 
 from whisper_live.transcriber.transcriber_faster_whisper import WhisperModel
 from whisper_live.backend.base import ServeClientBase
@@ -14,7 +10,6 @@ from whisper_live.runtime import resolve_runtime
 class ServeClientFasterWhisper(ServeClientBase):
     SINGLE_MODEL = None
     SINGLE_MODEL_LOCK = threading.Lock()
-    BATCH_WORKER = None
 
     def __init__(
         self,
@@ -23,17 +18,14 @@ class ServeClientFasterWhisper(ServeClientBase):
         device=None,
         language=None,
         client_uid=None,
-        model="small.en",
+        model=None,
         initial_prompt=None,
         vad_parameters=None,
         use_vad=True,
-        single_model=False,
         send_last_n_segments=10,
         no_speech_thresh=0.45,
         clip_audio=False,
         same_output_threshold=7,
-        cache_path="~/.cache/whisper-live/",
-        translation_queue=None,
         hotwords=None,
         diarization=None,
         word_timestamps=False,
@@ -50,7 +42,7 @@ class ServeClientFasterWhisper(ServeClientBase):
             device (str, optional): The device type for Whisper, "cuda" or "cpu". Defaults to None.
             language (str, optional): The language for transcription. Defaults to None.
             client_uid (str, optional): A unique identifier for the client. Defaults to None.
-            model (str, optional): The whisper model size. Defaults to 'small.en'
+            model (str): Path to the bundled CTranslate2 Turbo model.
             initial_prompt (str, optional): Prompt for whisper inference. Defaults to None.
             single_model (bool, optional): Whether to instantiate a new model for each client connection. Defaults to False.
             send_last_n_segments (int, optional): Number of most recent segments to send to the client. Defaults to 10.
@@ -66,20 +58,14 @@ class ServeClientFasterWhisper(ServeClientBase):
             no_speech_thresh,
             clip_audio,
             same_output_threshold,
-            translation_queue,
             diarization,
             word_timestamps,
         )
-        self.cache_path = cache_path
-        self.model_sizes = [
-            "tiny", "tiny.en", "base", "base.en", "small", "small.en",
-            "medium", "medium.en", "large-v2", "large-v3", "distil-small.en",
-            "distil-medium.en", "distil-large-v2", "distil-large-v3",
-            "large-v3-turbo", "turbo"
-        ]
 
+        if not model:
+            raise ValueError("A CTranslate2 Turbo model path is required")
         self.model_size_or_path = model
-        self.language = "en" if self.model_size_or_path.endswith("en") else language
+        self.language = language
         self.task = task
         self.initial_prompt = initial_prompt
         self.vad_parameters = vad_parameters or {"threshold": 0.5}
@@ -90,23 +76,25 @@ class ServeClientFasterWhisper(ServeClientBase):
         if self.model_size_or_path is None:
             return
         logging.info(f"Using Device={device} with precision {self.compute_type}")
-    
+
         try:
-            if single_model:
-                if ServeClientFasterWhisper.SINGLE_MODEL is None:
+            with ServeClientFasterWhisper.SINGLE_MODEL_LOCK:
+                if self.SINGLE_MODEL is None:
                     self.create_model(device)
                     ServeClientFasterWhisper.SINGLE_MODEL = self.transcriber
                 else:
-                    self.transcriber = ServeClientFasterWhisper.SINGLE_MODEL
-            else:
-                self.create_model(device)
+                    self.transcriber = self.SINGLE_MODEL
         except Exception as e:
             logging.error(f"Failed to load model: {e}")
-            self.websocket.send(json.dumps({
-                "uid": self.client_uid,
-                "status": "ERROR",
-                "message": f"Failed to load model: {str(self.model_size_or_path)}"
-            }))
+            self.websocket.send(
+                json.dumps(
+                    {
+                        "uid": self.client_uid,
+                        "status": "ERROR",
+                        "message": f"Failed to load model: {str(self.model_size_or_path)}",
+                    }
+                )
+            )
             self.websocket.close()
             return
 
@@ -120,44 +108,19 @@ class ServeClientFasterWhisper(ServeClientBase):
                 {
                     "uid": self.client_uid,
                     "message": self.SERVER_READY,
-                    "backend": "faster_whisper"
+                    "backend": "faster_whisper",
                 }
             )
         )
 
     def create_model(self, device):
-        """
-        Instantiates a new model, sets it as the transcriber. If model is a huggingface model_id
-        then it is automatically converted to ctranslate2(faster_whisper) format.
-        """
-        model_ref = self.model_size_or_path
-
-        if model_ref in self.model_sizes:
-            model_to_load = model_ref
-        else:
-            logging.info(f"Model not in model_sizes")
-            if os.path.isdir(model_ref) and ctranslate2.contains_model(model_ref):
-                model_to_load = model_ref
-            else:
-                local_snapshot = snapshot_download(
-                    repo_id = model_ref,
-                    repo_type = "model",
-                )
-                if ctranslate2.contains_model(local_snapshot):
-                    model_to_load = local_snapshot
-                else:
-                    raise ValueError(
-                        f"'{model_ref}' is not a CTranslate2 model. "
-                        "The Pascal image intentionally omits Transformers; "
-                        "convert the model before serving it."
-                    )
-
-        logging.info(f"Loading model: {model_to_load}")
+        """Load the bundled large-v3-turbo CTranslate2 model."""
+        logging.info(f"Loading model: {self.model_size_or_path}")
         self.transcriber = WhisperModel(
-            model_to_load,
+            self.model_size_or_path,
             device=device,
             compute_type=self.compute_type,
-            local_files_only=False,
+            local_files_only=True,
         )
 
     def set_language(self, info):
@@ -172,9 +135,18 @@ class ServeClientFasterWhisper(ServeClientBase):
         """
         if info.language_probability > 0.5:
             self.language = info.language
-            logging.info(f"Detected language {self.language} with probability {info.language_probability}")
-            self.websocket.send(json.dumps(
-                {"uid": self.client_uid, "language": self.language, "language_prob": info.language_probability}))
+            logging.info(
+                f"Detected language {self.language} with probability {info.language_probability}"
+            )
+            self.websocket.send(
+                json.dumps(
+                    {
+                        "uid": self.client_uid,
+                        "language": self.language,
+                        "language_prob": info.language_probability,
+                    }
+                )
+            )
 
     def transcribe_audio(self, input_sample):
         """
@@ -192,41 +164,17 @@ class ServeClientFasterWhisper(ServeClientBase):
             depends on the implementation of the `transcriber.transcribe` method but typically
             includes the transcribed text.
         """
-        # Batch inference path: submit to central queue and wait
-        if ServeClientFasterWhisper.BATCH_WORKER is not None:
-            from whisper_live.batch_inference import BatchRequest
-            request = BatchRequest(
-                audio=input_sample,
+        with ServeClientFasterWhisper.SINGLE_MODEL_LOCK:
+            result, info = self.transcriber.transcribe(
+                input_sample,
+                initial_prompt=self.initial_prompt,
                 language=self.language,
                 task=self.task,
-                initial_prompt=self.initial_prompt,
-                use_vad=self.use_vad,
+                vad_filter=self.use_vad,
                 vad_parameters=self.vad_parameters if self.use_vad else None,
+                hotwords=self.hotwords,
                 word_timestamps=self.word_timestamps,
-                client_uid=self.client_uid,
             )
-            ServeClientFasterWhisper.BATCH_WORKER.submit(request)
-            request.future.wait(timeout=30)
-            if request.error:
-                raise request.error
-            if self.language is None and request.info is not None:
-                self.set_language(request.info)
-            return request.result
-
-        # Original lock-based path (backward compatible)
-        if ServeClientFasterWhisper.SINGLE_MODEL:
-            ServeClientFasterWhisper.SINGLE_MODEL_LOCK.acquire()
-        result, info = self.transcriber.transcribe(
-            input_sample,
-            initial_prompt=self.initial_prompt,
-            language=self.language,
-            task=self.task,
-            vad_filter=self.use_vad,
-            vad_parameters=self.vad_parameters if self.use_vad else None,
-            hotwords=self.hotwords,
-            word_timestamps=self.word_timestamps)
-        if ServeClientFasterWhisper.SINGLE_MODEL:
-            ServeClientFasterWhisper.SINGLE_MODEL_LOCK.release()
 
         if self.language is None and info is not None:
             self.set_language(info)

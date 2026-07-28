@@ -1,39 +1,25 @@
+import { buildUtterances } from "./utterances.mjs";
+
 const elements = {
-  serverPill: document.querySelector("#serverPill"),
-  serverSummary: document.querySelector("#serverSummary"),
+  statusDot: document.querySelector("#statusDot"),
+  serverStatus: document.querySelector("#serverStatus"),
+  liveNav: document.querySelector("#liveNav"),
+  liveState: document.querySelector("#liveState"),
+  historyList: document.querySelector("#historyList"),
+  refreshHistory: document.querySelector("#refreshHistory"),
+  viewTitle: document.querySelector("#viewTitle"),
+  gpuPowerValue: document.querySelector("#gpuPowerValue"),
+  gpuMemoryValue: document.querySelector("#gpuMemoryValue"),
+  diarizationToggle: document.querySelector("#diarizationToggle"),
+  copyButton: document.querySelector("#copyButton"),
   recordButton: document.querySelector("#recordButton"),
   recordLabel: document.querySelector("#recordLabel"),
-  permissionHint: document.querySelector("#permissionHint"),
-  micOrbit: document.querySelector("#micOrbit"),
-  levelMeter: document.querySelector("#levelMeter"),
-  levelValue: document.querySelector("#levelValue"),
-  diarizationToggle: document.querySelector("#diarizationToggle"),
-  modelValue: document.querySelector("#modelValue"),
-  deviceValue: document.querySelector("#deviceValue"),
-  computeValue: document.querySelector("#computeValue"),
-  copyButton: document.querySelector("#copyButton"),
-  clearButton: document.querySelector("#clearButton"),
-  streamState: document.querySelector("#streamState"),
-  elapsedValue: document.querySelector("#elapsedValue"),
-  latencyValue: document.querySelector("#latencyValue"),
-  eventValue: document.querySelector("#eventValue"),
-  gpuName: document.querySelector("#gpuName"),
-  sessionValue: document.querySelector("#sessionValue"),
-  gpuUtilValue: document.querySelector("#gpuUtilValue"),
-  gpuUtilMeter: document.querySelector("#gpuUtilMeter"),
-  gpuMemoryValue: document.querySelector("#gpuMemoryValue"),
-  gpuMemoryMeter: document.querySelector("#gpuMemoryMeter"),
-  gpuTempValue: document.querySelector("#gpuTempValue"),
-  gpuPowerValue: document.querySelector("#gpuPowerValue"),
-  gpuClockValue: document.querySelector("#gpuClockValue"),
-  gpuFanValue: document.querySelector("#gpuFanValue"),
   errorBanner: document.querySelector("#errorBanner"),
   transcriptScroll: document.querySelector("#transcriptScroll"),
   emptyState: document.querySelector("#emptyState"),
   segmentsList: document.querySelector("#segmentsList"),
   partialCard: document.querySelector("#partialCard"),
   partialText: document.querySelector("#partialText"),
-  eventLog: document.querySelector("#eventLog"),
 };
 
 const state = {
@@ -48,14 +34,10 @@ const state = {
   serverReady: false,
   running: false,
   stopping: false,
-  startedAt: 0,
-  sentSamples: 0,
-  latestSegmentEnd: 0,
-  eventCount: 0,
   segments: new Map(),
   partial: null,
-  events: [],
-  timer: null,
+  selectedSession: null,
+  history: [],
   telemetryTimer: null,
   devEvents: null,
 };
@@ -94,34 +76,6 @@ class StreamingResampler {
   }
 }
 
-function formatClock(seconds, milliseconds = false) {
-  const safeSeconds = Math.max(0, Number(seconds) || 0);
-  const minutes = Math.floor(safeSeconds / 60);
-  const remainder = safeSeconds % 60;
-  if (milliseconds) {
-    return `${String(minutes).padStart(2, "0")}:${remainder
-      .toFixed(3)
-      .padStart(6, "0")}`;
-  }
-  return `${String(minutes).padStart(2, "0")}:${String(
-    Math.floor(remainder),
-  ).padStart(2, "0")}`;
-}
-
-function speakerName(segment) {
-  const raw = segment.speaker ?? segment.speaker_id;
-  if (raw === undefined || raw === null || raw === "") return "Speaker";
-  const text = String(raw).replace(/^speaker[_\s-]*/i, "");
-  return /^\d+$/.test(text) ? `Speaker ${Number(text) + 1}` : `Speaker ${text}`;
-}
-
-function speakerIndex(segment) {
-  const name = speakerName(segment);
-  let hash = 0;
-  for (const character of name) hash = (hash * 31 + character.charCodeAt(0)) | 0;
-  return Math.abs(hash) % 6;
-}
-
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -131,14 +85,39 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-function setServerState(kind, summary) {
-  elements.serverPill.dataset.state = kind;
-  elements.serverSummary.textContent = summary;
+function formatClock(seconds) {
+  const safeSeconds = Math.max(0, Number(seconds) || 0);
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainder = safeSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${remainder
+    .toFixed(1)
+    .padStart(4, "0")}`;
 }
 
-function setStreamState(label, kind = "idle") {
-  elements.streamState.textContent = label;
-  elements.streamState.dataset.state = kind;
+function formatDuration(seconds) {
+  const value = Math.max(0, Math.round(Number(seconds) || 0));
+  const minutes = Math.floor(value / 60);
+  const remainder = value % 60;
+  return minutes ? `${minutes}m ${remainder}s` : `${remainder}s`;
+}
+
+function formatDate(value, detailed = false) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unknown";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    ...(detailed ? { year: "numeric" } : {}),
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function speakerName(segment) {
+  const raw = segment.speaker ?? segment.speaker_id;
+  if (raw === undefined || raw === null || raw === "") return "Speaker";
+  const text = String(raw).replace(/^speaker[_\s-]*/i, "");
+  return /^\d+$/.test(text) ? `Speaker ${Number(text) + 1}` : `Speaker ${text}`;
 }
 
 function showError(message) {
@@ -151,29 +130,49 @@ function clearError() {
   elements.errorBanner.textContent = "";
 }
 
-function renderTranscript() {
-  const completed = [...state.segments.values()].sort(
+function liveSegments() {
+  return [...state.segments.values()].sort(
     (left, right) => Number(left.start) - Number(right.start),
   );
-  elements.emptyState.hidden = completed.length > 0 || Boolean(state.partial);
+}
+
+function visibleSegments() {
+  return state.selectedSession?.segments || liveSegments();
+}
+
+function renderTranscript() {
+  const completed = buildUtterances(visibleSegments());
+  const isLive = state.selectedSession === null;
+  const partialText = isLive ? state.partial?.text?.trim() : "";
+
+  elements.viewTitle.textContent = isLive
+    ? "Live"
+    : formatDate(state.selectedSession.started_at, true);
+  elements.liveNav.classList.toggle("selected", isLive);
+  for (const item of elements.historyList.querySelectorAll(".history-item")) {
+    item.classList.toggle(
+      "selected",
+      item.dataset.sessionId === state.selectedSession?.id,
+    );
+  }
+
   elements.segmentsList.innerHTML = completed
-    .map((segment) => {
-      const speaker = speakerName(segment);
-      return `
-        <li class="segment speaker-${speakerIndex(segment)}">
-          <time>${formatClock(segment.start, true)}</time>
+    .map(
+      (segment) => `
+        <li class="segment">
+          <time>${formatClock(segment.start)}</time>
           <div>
-            <span class="speaker-label">${escapeHtml(speaker)}</span>
+            <span class="speaker">${escapeHtml(speakerName(segment))}</span>
             <p>${escapeHtml(segment.text?.trim() || "")}</p>
           </div>
-        </li>`;
-    })
+        </li>`,
+    )
     .join("");
 
-  const partialText = state.partial?.text?.trim();
-  elements.partialText.textContent =
-    partialText || (state.running ? "Listening for speech…" : "Waiting for speech…");
-  elements.partialCard.classList.toggle("has-text", Boolean(partialText));
+  elements.partialText.textContent = partialText || "";
+  elements.partialCard.hidden = !partialText;
+  elements.emptyState.hidden = completed.length > 0 || Boolean(partialText);
+  elements.copyButton.disabled = completed.length === 0 && !partialText;
 
   if (completed.length || partialText) {
     requestAnimationFrame(() => {
@@ -182,13 +181,84 @@ function renderTranscript() {
   }
 }
 
+function renderHistory() {
+  elements.historyList.replaceChildren();
+  if (!state.server?.history_enabled) {
+    const empty = document.createElement("p");
+    empty.className = "history-empty";
+    empty.textContent = "Disabled";
+    elements.historyList.append(empty);
+    return;
+  }
+  if (!state.history.length) {
+    const empty = document.createElement("p");
+    empty.className = "history-empty";
+    empty.textContent = "No logs";
+    elements.historyList.append(empty);
+    return;
+  }
+
+  for (const session of state.history) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "history-item";
+    item.dataset.sessionId = session.id;
+    item.classList.toggle("selected", session.id === state.selectedSession?.id);
+
+    const title = document.createElement("strong");
+    title.textContent = formatDate(session.started_at);
+    const meta = document.createElement("span");
+    const stateLabel = session.status === "active" ? "Live" : formatDuration(session.duration_seconds);
+    meta.textContent = session.preview
+      ? `${stateLabel} · ${session.preview}`
+      : stateLabel;
+    item.append(title, meta);
+    item.addEventListener("click", () => {
+      selectHistory(session.id);
+    });
+    elements.historyList.append(item);
+  }
+}
+
+async function loadHistory() {
+  if (!state.server?.history_enabled) {
+    state.history = [];
+    renderHistory();
+    return;
+  }
+  try {
+    const response = await fetch("/api/history?limit=100", { cache: "no-store" });
+    if (!response.ok) throw new Error(`History returned ${response.status}`);
+    const payload = await response.json();
+    state.history = payload.sessions || [];
+    renderHistory();
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+async function selectHistory(sessionId) {
+  clearError();
+  try {
+    const response = await fetch(`/api/history/${encodeURIComponent(sessionId)}`, {
+      cache: "no-store",
+    });
+    if (!response.ok) throw new Error(`Log returned ${response.status}`);
+    state.selectedSession = await response.json();
+    renderTranscript();
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+function showLive() {
+  state.selectedSession = null;
+  renderTranscript();
+}
+
 function ingestSegments(segments) {
   let newestPartial = null;
   for (const segment of segments) {
-    state.latestSegmentEnd = Math.max(
-      state.latestSegmentEnd,
-      Number(segment.end) || 0,
-    );
     if (segment.completed) {
       const key = `${segment.start}-${segment.end}`;
       state.segments.set(key, { ...state.segments.get(key), ...segment });
@@ -197,141 +267,59 @@ function ingestSegments(segments) {
     }
   }
   state.partial = newestPartial;
-  renderTranscript();
-  updateLag();
-}
-
-function appendEvent(payload) {
-  state.eventCount += 1;
-  state.events.unshift({
-    at: new Date().toISOString(),
-    payload,
-  });
-  state.events = state.events.slice(0, 80);
-  elements.eventValue.textContent = String(state.eventCount);
-  elements.eventLog.textContent = state.events
-    .map((event) => `${event.at}\n${JSON.stringify(event.payload, null, 2)}`)
-    .join("\n\n");
-}
-
-function updateLag() {
-  if (!state.running || !state.latestSegmentEnd) {
-    elements.latencyValue.textContent = "—";
-    return;
-  }
-  const audioSeconds = state.sentSamples / (state.server?.sample_rate || 16000);
-  const lag = Math.max(0, audioSeconds - state.latestSegmentEnd);
-  elements.latencyValue.textContent =
-    lag < 1 ? `${Math.round(lag * 1000)} ms` : `${lag.toFixed(1)} s`;
-}
-
-function updateTimer() {
-  if (!state.running) return;
-  const elapsed = (performance.now() - state.startedAt) / 1000;
-  elements.elapsedValue.textContent = formatClock(elapsed);
-  updateLag();
-}
-
-function setInputLevel(chunk) {
-  let squareSum = 0;
-  for (const sample of chunk) squareSum += sample * sample;
-  const rms = Math.sqrt(squareSum / Math.max(1, chunk.length));
-  const db = Math.max(-60, 20 * Math.log10(Math.max(rms, 0.001)));
-  const percent = Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
-  elements.levelMeter.style.width = `${percent}%`;
-  elements.levelValue.textContent = `${Math.round(db)} dB`;
-}
-
-async function loadStatus() {
-  try {
-    const response = await fetch("/api/status", { cache: "no-store" });
-    if (!response.ok) throw new Error(`Status request returned ${response.status}`);
-    state.server = await response.json();
-    elements.modelValue.textContent = state.server.model;
-    elements.deviceValue.textContent = state.server.device.toUpperCase();
-    elements.computeValue.textContent = state.server.compute_type.toUpperCase();
-    elements.diarizationToggle.disabled = !state.server.diarization_available;
-    if (!state.server.diarization_available) {
-      elements.diarizationToggle.checked = false;
-    }
-    const mode = state.server.dev_mode ? " · DEV" : "";
-    setServerState(
-      "ready",
-      `${state.server.device.toUpperCase()} · READY${mode}`,
-    );
-    elements.recordButton.disabled = false;
-    enableDevReload();
-    await loadTelemetry();
-    state.telemetryTimer = window.setInterval(loadTelemetry, 1000);
-  } catch (error) {
-    setServerState("error", "Server unavailable");
-    showError(`Could not reach WhisperLive: ${error.message}`);
-  }
-}
-
-function setMeter(element, percent) {
-  const safe = Math.max(0, Math.min(100, Number(percent) || 0));
-  element.style.width = `${safe}%`;
+  if (state.selectedSession === null) renderTranscript();
 }
 
 function renderTelemetry(payload) {
   const gpu = payload.gpu || {};
-  const sessions = payload.sessions || {};
-  elements.sessionValue.textContent =
-    `${sessions.active ?? 0} / ${sessions.capacity ?? 0} sessions`;
-
   if (!gpu.available) {
-    elements.gpuName.textContent = "NVIDIA telemetry unavailable";
-    [
-      elements.gpuUtilValue,
-      elements.gpuMemoryValue,
-      elements.gpuTempValue,
-      elements.gpuPowerValue,
-      elements.gpuClockValue,
-      elements.gpuFanValue,
-    ].forEach((element) => {
-      element.textContent = "—";
-    });
-    setMeter(elements.gpuUtilMeter, 0);
-    setMeter(elements.gpuMemoryMeter, 0);
+    elements.gpuPowerValue.textContent = "—";
+    elements.gpuMemoryValue.textContent = "—";
     return;
   }
-
   const used = Number(gpu.memory_used_mib) || 0;
   const total = Number(gpu.memory_total_mib) || 0;
-  const memoryPercent = total ? (used / total) * 100 : 0;
-  elements.gpuName.textContent = gpu.name || `NVIDIA GPU ${gpu.index ?? 0}`;
-  elements.gpuUtilValue.textContent = `${gpu.utilization_percent ?? 0}%`;
-  elements.gpuMemoryValue.textContent =
-    `${(used / 1024).toFixed(1)} / ${(total / 1024).toFixed(1)} GB`;
-  elements.gpuTempValue.textContent =
-    gpu.temperature_c == null ? "—" : `${gpu.temperature_c}°C`;
   elements.gpuPowerValue.textContent =
     gpu.power_w == null ? "—" : `${Math.round(gpu.power_w)} W`;
-  elements.gpuClockValue.textContent =
-    gpu.graphics_clock_mhz == null ? "—" : `${gpu.graphics_clock_mhz} MHz`;
-  elements.gpuFanValue.textContent =
-    gpu.fan_percent == null ? "—" : `${gpu.fan_percent}%`;
-  setMeter(elements.gpuUtilMeter, gpu.utilization_percent);
-  setMeter(elements.gpuMemoryMeter, memoryPercent);
+  elements.gpuMemoryValue.textContent =
+    `${(used / 1024).toFixed(1)} / ${(total / 1024).toFixed(1)} GB`;
 }
 
 async function loadTelemetry() {
   try {
     const response = await fetch("/api/telemetry", { cache: "no-store" });
-    if (!response.ok) return;
-    renderTelemetry(await response.json());
+    if (response.ok) renderTelemetry(await response.json());
   } catch {
-    // The main status indicator already reports server connectivity.
+    // Server status already communicates connectivity.
   }
 }
 
 function enableDevReload() {
   if (!state.server?.dev_mode || !window.EventSource || state.devEvents) return;
   state.devEvents = new EventSource("/api/dev/events");
-  state.devEvents.addEventListener("reload", () => {
-    window.location.reload();
-  });
+  state.devEvents.addEventListener("reload", () => window.location.reload());
+}
+
+async function loadStatus() {
+  try {
+    const response = await fetch("/api/status", { cache: "no-store" });
+    if (!response.ok) throw new Error(`Status returned ${response.status}`);
+    state.server = await response.json();
+    elements.statusDot.className = "status-dot ready";
+    elements.serverStatus.textContent = state.server.model;
+    elements.recordButton.disabled = false;
+    elements.diarizationToggle.disabled = !state.server.diarization_available;
+    if (!state.server.diarization_available) {
+      elements.diarizationToggle.checked = false;
+    }
+    enableDevReload();
+    await Promise.all([loadTelemetry(), loadHistory()]);
+    state.telemetryTimer = window.setInterval(loadTelemetry, 1000);
+  } catch (error) {
+    elements.statusDot.className = "status-dot error";
+    elements.serverStatus.textContent = "Offline";
+    showError(error.message);
+  }
 }
 
 function websocketUrl() {
@@ -340,41 +328,35 @@ function websocketUrl() {
   return `${protocol}//${host}:${state.server.websocket_port}`;
 }
 
+function sameOutputThreshold() {
+  return String(state.server?.model).toLowerCase().includes("turbo") ? 2 : 10;
+}
+
 function handleServerMessage(event) {
   let payload;
   try {
     payload = JSON.parse(event.data);
   } catch {
-    appendEvent({ status: "INVALID_JSON", value: String(event.data) });
     return;
   }
-  appendEvent(payload);
-
-  // WhisperLive uses `message` for SERVER_READY and `status` for later
-  // lifecycle events. Normalize both shapes before gating microphone audio.
   const messageType = payload.status || payload.message;
   if (messageType === "SERVER_READY") {
     state.serverReady = true;
-    setStreamState("LIVE", "live");
-    elements.permissionHint.textContent = "Streaming 16 kHz audio to the local GPU.";
+    elements.liveState.textContent = "Listening";
+    loadHistory();
   } else if (messageType === "WAIT") {
-    setStreamState("QUEUED", "waiting");
-    elements.permissionHint.textContent = `GPU busy · estimated wait ${Number(payload.message).toFixed(1)} min`;
-  } else if (messageType === "WARNING") {
-    showError(payload.message || "The server returned a warning.");
-  } else if (messageType === "ERROR") {
-    showError(payload.message || "The server returned an error.");
+    elements.liveState.textContent = "Busy";
+  } else if (messageType === "WARNING" || messageType === "ERROR") {
+    showError(payload.message || messageType);
   } else if (messageType === "DISCONNECT") {
-    showError(payload.message || "The server ended this session.");
     stopSession();
   }
-
   if (Array.isArray(payload.segments)) ingestSegments(payload.segments);
 }
 
 async function configureAudio() {
   if (!navigator.mediaDevices?.getUserMedia) {
-    throw new Error("Microphone capture is unavailable in this browser or context.");
+    throw new Error("Microphone unavailable");
   }
   state.mediaStream = await navigator.mediaDevices.getUserMedia({
     audio: {
@@ -395,7 +377,7 @@ async function configureAudio() {
   state.source = state.audioContext.createMediaStreamSource(state.mediaStream);
   state.worklet = new AudioWorkletNode(
     state.audioContext,
-    "whisperlive-pcm-capture",
+    "pascalscribe-pcm-capture",
   );
   state.silentGain = state.audioContext.createGain();
   state.silentGain.gain.value = 0;
@@ -404,66 +386,65 @@ async function configureAudio() {
   state.silentGain.connect(state.audioContext.destination);
 
   state.worklet.port.onmessage = ({ data }) => {
-    setInputLevel(data);
     if (!state.serverReady || state.socket?.readyState !== WebSocket.OPEN) return;
     const resampled = state.resampler.process(data);
-    if (resampled.length) {
-      state.socket.send(resampled.buffer);
-      state.sentSamples += resampled.length;
-    }
+    if (resampled.length) state.socket.send(resampled.buffer);
   };
+}
+
+function clearLiveTranscript() {
+  state.segments.clear();
+  state.partial = null;
 }
 
 async function startSession() {
   if (state.running) return;
   clearError();
+  clearLiveTranscript();
+  state.selectedSession = null;
   state.running = true;
   state.stopping = false;
   state.serverReady = false;
-  state.startedAt = performance.now();
-  state.sentSamples = 0;
-  state.latestSegmentEnd = 0;
-  state.eventCount = 0;
-  state.events = [];
-  elements.eventValue.textContent = "0";
-  elements.eventLog.textContent = "Waiting for server events…";
+  elements.liveState.textContent = "Connecting";
   elements.recordButton.disabled = true;
-  setStreamState("CONNECTING", "waiting");
+  renderTranscript();
 
   try {
     await configureAudio();
-    state.socket = new WebSocket(websocketUrl());
-    state.socket.addEventListener("open", () => {
-      state.socket.send(
+    const socket = new WebSocket(websocketUrl());
+    state.socket = socket;
+    socket.addEventListener("open", () => {
+      if (state.socket !== socket) return;
+      socket.send(
         JSON.stringify({
           uid: crypto.randomUUID(),
           language: "en",
           task: "transcribe",
-          model: "small.en",
+          model: state.server.model,
           use_vad: true,
           enable_diarization: elements.diarizationToggle.checked,
+          same_output_threshold: sameOutputThreshold(),
           send_last_n_segments: 100,
         }),
       );
     });
-    state.socket.addEventListener("message", handleServerMessage);
-    state.socket.addEventListener("error", () => {
-      showError(`Could not open ${websocketUrl()}. Is port ${state.server.websocket_port} reachable?`);
+    socket.addEventListener("message", (event) => {
+      if (state.socket !== socket) return;
+      handleServerMessage(event);
     });
-    state.socket.addEventListener("close", () => {
-      if (state.running && !state.stopping) {
-        showError("The streaming connection closed unexpectedly.");
-        stopSession();
-      }
+    socket.addEventListener("error", () => {
+      if (state.socket !== socket) return;
+      showError("WebSocket unavailable");
+    });
+    socket.addEventListener("close", () => {
+      if (state.socket !== socket) return;
+      if (state.running && !state.stopping) stopSession();
     });
 
-    state.timer = window.setInterval(updateTimer, 250);
     elements.recordButton.classList.add("stop");
-    elements.recordLabel.textContent = "Stop session";
+    elements.recordLabel.textContent = "Stop";
     elements.recordButton.disabled = false;
-    elements.micOrbit.classList.add("active");
     elements.diarizationToggle.disabled = true;
-    renderTranscript();
   } catch (error) {
     showError(error.message);
     await stopSession();
@@ -475,14 +456,18 @@ async function stopSession() {
   state.stopping = true;
   state.running = false;
   state.serverReady = false;
-  window.clearInterval(state.timer);
-  state.timer = null;
+  elements.recordButton.disabled = true;
 
-  if (state.socket?.readyState === WebSocket.OPEN) {
-    state.socket.send(new TextEncoder().encode("END_OF_AUDIO"));
+  const socket = state.socket;
+  state.socket = null;
+  if (socket?.readyState === WebSocket.OPEN) {
+    socket.send(new TextEncoder().encode("END_OF_AUDIO"));
     await new Promise((resolve) => window.setTimeout(resolve, 120));
-    state.socket.close(1000, "Session ended");
+    socket.close(1000, "Session ended");
+  } else if (socket?.readyState === WebSocket.CONNECTING) {
+    socket.close();
   }
+
   state.worklet?.disconnect();
   state.source?.disconnect();
   state.silentGain?.disconnect();
@@ -491,7 +476,6 @@ async function stopSession() {
     await state.audioContext.close();
   }
 
-  state.socket = null;
   state.worklet = null;
   state.source = null;
   state.silentGain = null;
@@ -499,31 +483,19 @@ async function stopSession() {
   state.audioContext = null;
   state.resampler = null;
   elements.recordButton.classList.remove("stop");
-  elements.recordLabel.textContent = "Start microphone";
+  elements.recordLabel.textContent = "Start";
   elements.recordButton.disabled = !state.server;
-  elements.micOrbit.classList.remove("active");
   elements.diarizationToggle.disabled = !state.server?.diarization_available;
-  elements.levelMeter.style.width = "0%";
-  elements.levelValue.textContent = "— dB";
-  elements.permissionHint.textContent = "Your browser will ask for microphone permission.";
-  setStreamState("IDLE");
-  renderTranscript();
+  elements.liveState.textContent = "Idle";
   state.stopping = false;
-}
-
-function clearTranscript() {
-  state.segments.clear();
-  state.partial = null;
-  state.latestSegmentEnd = 0;
-  renderTranscript();
+  window.setTimeout(loadHistory, 400);
 }
 
 async function copyTranscript() {
-  const text = [...state.segments.values()]
-    .sort((left, right) => Number(left.start) - Number(right.start))
+  const text = buildUtterances(visibleSegments())
     .map(
       (segment) =>
-        `[${formatClock(segment.start, true)}] ${speakerName(segment)}: ${segment.text?.trim()}`,
+        `[${formatClock(segment.start)}] ${speakerName(segment)}: ${segment.text?.trim()}`,
     )
     .join("\n");
   if (!text) return;
@@ -531,16 +503,17 @@ async function copyTranscript() {
   elements.copyButton.textContent = "Copied";
   window.setTimeout(() => {
     elements.copyButton.textContent = "Copy";
-  }, 1200);
+  }, 1000);
 }
 
+elements.liveNav.addEventListener("click", showLive);
+elements.refreshHistory.addEventListener("click", loadHistory);
 elements.recordButton.addEventListener("click", () => {
   if (state.running) stopSession();
   else startSession();
 });
-elements.clearButton.addEventListener("click", clearTranscript);
 elements.copyButton.addEventListener("click", () => {
-  copyTranscript().catch((error) => showError(`Copy failed: ${error.message}`));
+  copyTranscript().catch((error) => showError(error.message));
 });
 window.addEventListener("beforeunload", () => {
   window.clearInterval(state.telemetryTimer);

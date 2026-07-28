@@ -1,18 +1,21 @@
-name: Pascal image
+name: Container
 
 on:
   pull_request:
     paths:
-      - ".github/workflows/pascal-image.yml"
-      - "docker/Dockerfile.pascal"
+      - ".github/workflows/image.yml"
+      - "Dockerfile"
       - "requirements/pascal.*"
+      - "run_server.py"
       - "tests/**"
+      - "third_party/**"
       - "whisper_live/**"
   push:
     branches:
+      - main
       - codex/pascal-sm61
     tags:
-      - "pascal-*"
+      - "v*"
   workflow_dispatch:
 
 permissions:
@@ -20,7 +23,7 @@ permissions:
   packages: write
 
 env:
-  IMAGE: ghcr.io/${{ github.repository_owner }}/whisperlive
+  IMAGE: ghcr.io/${{ github.repository_owner }}/pascalscribe
 
 jobs:
   test:
@@ -31,13 +34,12 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          file: docker/Dockerfile.pascal
           target: test
           load: true
-          tags: whisperlive:pascal-test
+          tags: pascalscribe:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - run: docker run --rm whisperlive:pascal-test
+      - run: docker run --rm pascalscribe:test
 
   publish:
     if: github.event_name != 'pull_request'
@@ -57,11 +59,10 @@ jobs:
           images: ${{ env.IMAGE }}
           tags: |
             type=raw,value=1080ti
-            type=sha,prefix=pascal-
+            type=sha
       - uses: docker/build-push-action@v6
         with:
           context: .
-          file: docker/Dockerfile.pascal
           target: runtime
           platforms: linux/amd64
           push: true
